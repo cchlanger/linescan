@@ -1,8 +1,8 @@
 """Contains all of the visualization tools for the line_scan application"""
 
-from read_roi import read_roi_zip, read_roi_file
 import matplotlib.pyplot as plt
 from skimage import io, measure
+from read_roi import read_roi_file, read_roi_zip
 
 
 def plot_image_and_profiles(
@@ -160,126 +160,64 @@ def plot_image_and_profiles_3c(
                     else:
                         axs[number_of_channels + disp_num].plot(x_values, y_values)
 
-
-# TODO: Merge Image would be nice
-# TODO: Also do not draw lineprofile if not displayed
 def plot_line_profiles(image_path, roi_path, disp_channels=None, number_of_channels=3):
-    """Plots every every linescan together with the image slice it was drawn on.
-    Colors represent the individual channels, the line drawn is diplayed on top of the image.
+    """
+    Plots every linescan together with the image slice it was drawn on.
+    Colors represent the individual channels, the line drawn is displayed on top of the image.
     The line profiles can be normalized, and the fitting and peak calling can be displayed.
-    Values are in pixel unless the user provides the pixel size in microns."""
+    Values are in pixels unless the user provides the pixel size in microns.
+    """
     if number_of_channels == 2 or number_of_channels == 3 or number_of_channels == 4:
-        plot_line_profiles_2c(
-            image_path,
-            roi_path,
-            disp_channels=disp_channels,
-            number_of_channels=number_of_channels,
-        )
+        if disp_channels is None:
+            disp_channels = [0, 1]
+        if len(disp_channels) > number_of_channels:
+            raise ValueError("You are trying to display more channels than your image has!")
+
+        if roi_path.find(".zip") == -1:
+            roi = read_roi_file(roi_path)
+        else:
+            roi = read_roi_zip(roi_path)
+
+        slice_count = 0
+        for _, item in roi.items():
+            slice_count += 1
+
+        _, axs = plt.subplots(slice_count, 1 + len(disp_channels), figsize=(15, 5 * slice_count), squeeze=False)
+        image = io.imread(image_path)
+
+        for item_num, item in enumerate(roi.items()):
+            _, item = item
+            img_slice = item["position"]["slice"]
+            src = (item["y1"], item["x1"])
+            dst = (item["y2"], item["x2"])
+            cmap = plt.get_cmap("tab10")
+            colors = iter(cmap.colors)
+
+            for channel in range(number_of_channels):
+                new_color = next(colors)
+                if number_of_channels == 2:
+                    values = measure.profile_line(image[img_slice - 1, channel, :, :], src, dst, 1, mode="constant")
+                elif number_of_channels >= 3:
+                    values = measure.profile_line(image[img_slice - 1, :, :, channel], src, dst, 1, mode="constant")
+                else:
+                    raise ValueError(f"Your channel number: {number_of_channels} is not supported.")
+                axs[item_num, 0].plot(range(len(values)), values, color=new_color)
+
+            cmap = plt.get_cmap("tab10")
+            colors = iter(cmap.colors)
+            for disp_num, disp_channel in enumerate(disp_channels):
+                new_color = next(colors)
+                if number_of_channels == 2:
+                    axs[item_num, 1 + disp_num].imshow(image[img_slice - 1, disp_channel, :, :], cmap="gray")
+                elif number_of_channels >= 3:
+                    axs[item_num, 1 + disp_num].imshow(image[img_slice - 1, :, :, disp_channel], cmap="gray")
+                else:
+                    raise ValueError(f"Your channel number: {number_of_channels} is not supported.")
+                x_values = [item["x1"], item["x2"]]
+                y_values = [item["y1"], item["y2"]]
+                axs[item_num, 1 + disp_num].plot(x_values, y_values, color=new_color)
+                axs[item_num, 1 + disp_num].set_xticks([])
+                axs[item_num, 1 + disp_num].set_yticks([])
+        plt.show()
     else:
-        print(
-            f"The channel number {number_of_channels}, is not supported in this version"
-        )
-
-
-def plot_line_profiles_2c(
-    image_path, roi_path, disp_channels=None, number_of_channels=2
-):
-    """The two channel implementation for the plot_line_profiles"""
-    # get roi
-    if disp_channels is None:
-        disp_channels = [0, 1]
-    if len(disp_channels) > number_of_channels:
-        raise ValueError("You are trying to display more channels then your image has!")
-
-    if roi_path.find(".zip") == -1:
-        roi = read_roi_file(roi_path)
-    else:
-        roi = read_roi_zip(roi_path)
-    # get slice set
-    # TODO: count simpler
-    slice_count = 0
-    for _, item in roi.items():
-        slice_count += 1
-
-    _, axs = plt.subplots(
-        slice_count, 1 + len(disp_channels), figsize=(15, 5 * slice_count), squeeze=False
-    )
-    image = io.imread(image_path)
-    # print(roi.items())
-    # print(len(roi.items()))
-
-    for item_num, item in enumerate(roi.items()):
-        _, item = item
-        img_slice = item["position"]["slice"]
-        src = (item["y1"], item["x1"])
-        dst = (item["y2"], item["x2"])
-        cmap = plt.get_cmap("tab10")
-        colors = iter(cmap.colors)
-        # TODO: cleaner color management
-        for channel in range(number_of_channels):
-            new_color = next(colors)
-            if number_of_channels == 2:
-                values = measure.profile_line(
-                    image[img_slice - 1, channel, :, :], src, dst, 1, mode="constant"
-                )
-            # TODO: This is not clean
-            elif number_of_channels >= 3:
-                values = measure.profile_line(
-                    image[img_slice - 1, :, :, channel], src, dst, 1, mode="constant"
-                )
-            else:
-                raise ValueError(
-                    f"Your channel number: {number_of_channels} is not supported."
-                )
-
-            axs[item_num, 0].plot(range(len(values)), values, color=new_color)
-        cmap = plt.get_cmap("tab10")
-        colors = iter(cmap.colors)
-        for disp_num, disp_channel in enumerate(disp_channels):
-            new_color = next(colors)
-            if number_of_channels == 2:
-                axs[item_num, 1 + disp_num].imshow(
-                    image[img_slice - 1, disp_channel, :, :], cmap="gray"
-                )
-            # TODO: This is not clean
-            elif number_of_channels >= 3:
-                axs[item_num, 1 + disp_num].imshow(
-                    image[img_slice - 1, :, :, disp_channel], cmap="gray"
-                )
-            else:
-                raise ValueError(
-                    f"Your channel number: {number_of_channels} is not supported."
-                )
-            x_values = [item["x1"], item["x2"]]
-            y_values = [item["y1"], item["y2"]]
-            axs[item_num, 1 + disp_num].plot(x_values, y_values, color=new_color)
-        # Draw images with lines for the set of channels to display
-        cmap = plt.get_cmap("tab10")
-        colors = iter(cmap.colors)
-        for disp_num, disp_channel in enumerate(disp_channels):
-            new_color = next(colors)
-            if number_of_channels == 2:
-                axs[item_num, 1 + disp_num].imshow(
-                    image[img_slice - 1, disp_channel, :, :], cmap="gray"
-                )
-            # TODO: This is not clean
-            elif number_of_channels >= 3:
-                axs[item_num, 1 + disp_num].imshow(
-                    image[img_slice - 1, :, :, disp_channel], cmap="gray"
-                )
-            else:
-                raise ValueError(
-                    f"Your channel number: {number_of_channels} is not supported."
-                )
-            x_values = [item["x1"], item["x2"]]
-            y_values = [item["y1"], item["y2"]]
-            axs[item_num, 1 + disp_num].plot(x_values, y_values, color=new_color)
-
-
-# def image_and_line(axs,item_num,disp_num,image,item):
-#     axs[item_num, 1 + disp_num].imshow(
-#         image[img_slice, disp_channel, :, :], cmap="gray"
-#     )
-#     x_values = [item["x1"], item["x2"]]
-#     y_values = [item["y1"], item["y2"]]
-#     axs[item_num, 1 + disp_num].plot(x_values, y_values, color=new_color)
+        print(f"The channel number {number_of_channels}, is not supported in this version")
