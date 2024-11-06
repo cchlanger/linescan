@@ -6,18 +6,12 @@ from skimage import io, measure
 
 
 def min_max_normalization(x):
+    """Naive min max normalization."""
     return (x - min(x)) / (max(x) - min(x))
 
 
 def read_roi(roi_path):
-    """Reads ROI data from a file.
-    Args:
-        roi_path (str): Path to the ROI file (.roi or .zip).
-    Returns:
-        dict: ROI data.
-    Raises:
-        ValueError: If the ROI file format is not supported.
-    """
+    """Reads ROI data from a file using the read_roi library."""
     if roi_path.endswith(".zip"):
         roi = read_roi_zip(roi_path)
     elif roi_path.endswith(".roi"):
@@ -27,13 +21,10 @@ def read_roi(roi_path):
     return roi
 
 
-# def plot_profile(ax, data, color):
-#     plt.plot(range(len(data)), data, color=color)
-
-
 def measure_line_values(
     image, channel, img_slice, src, dst, line_width, number_of_channels
 ):
+    """Uses measure.profile_line from skimage to get the values along the line, width can be specified."""
     if number_of_channels == 2:
         values = measure.profile_line(
             # slice - 1, because FIJI starts counting at 1
@@ -59,8 +50,8 @@ def measure_line_values(
 def plot_line_profiles(image_path, roi_path, number_of_channels, line_width=1):
     """Plots every every linescan together with the image slice it was drawn on.
     Colors represent the individual channels, the line drawn is diplayed on top of the image.
-    The line profiles can be normalized, and the fitting and peak calling can be displayed.
-    Values are in pixel unless the user provides the pixel size in microns."""
+    The line profiles is normalized.(In future and the fitting and peak calling can be displayed).
+    Values are in pixel."""
     if number_of_channels == 2 or number_of_channels == 3:
         # get roi
         if number_of_channels == 2:
