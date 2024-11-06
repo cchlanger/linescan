@@ -9,6 +9,53 @@ def min_max_normalization(x):
     return (x - min(x)) / (max(x) - min(x))
 
 
+def read_roi(roi_path):
+    """Reads ROI data from a file.
+    Args:
+        roi_path (str): Path to the ROI file (.roi or .zip).
+    Returns:
+        dict: ROI data.
+    Raises:
+        ValueError: If the ROI file format is not supported.
+    """
+    if roi_path.endswith(".zip"):
+        roi = read_roi_zip(roi_path)
+    elif roi_path.endswith(".roi"):
+        roi = read_roi_file(roi_path)
+    else:
+        raise ValueError(f"Unsupported ROI file format. Must be .zip or .roi")
+    return roi
+
+
+# def plot_profile(ax, data, color):
+#     plt.plot(range(len(data)), data, color=color)
+
+
+def measure_line_values(
+    image, channel, img_slice, src, dst, line_width, number_of_channels
+):
+    if number_of_channels == 2:
+        values = measure.profile_line(
+            # slice - 1, because FIJI starts counting at 1
+            image[img_slice - 1, channel, :, :],
+            src,
+            dst,
+            line_width,
+            mode="constant",
+        )
+    elif number_of_channels == 3:
+        values = measure.profile_line(
+            image[img_slice - 1, :, :, channel],
+            src,
+            dst,
+            line_width,
+            mode="constant",
+        )
+    else:
+        raise ValueError(f"Your channel number: {number_of_channels} is not supported.")
+    return values
+
+
 def plot_line_profiles(image_path, roi_path, number_of_channels, line_width=1):
     """Plots every every linescan together with the image slice it was drawn on.
     Colors represent the individual channels, the line drawn is diplayed on top of the image.
@@ -21,12 +68,7 @@ def plot_line_profiles(image_path, roi_path, number_of_channels, line_width=1):
         if number_of_channels == 3:
             disp_channels = [0, 1, 2]
 
-        if roi_path.endswith(".zip"):
-            roi = read_roi_file(roi_path)
-        elif roi_path.endswith(".roi"):
-            roi = read_roi_file(roi_path)
-        else:
-            raise ValueError(f"Your ROI file must be a .zip or a .roi!")
+        roi = read_roi(roi_path)
         # Counts how many images need to be displayed
         slice_count = 0
         for _, item in roi.items():
@@ -46,36 +88,22 @@ def plot_line_profiles(image_path, roi_path, number_of_channels, line_width=1):
             src = (item["y1"], item["x1"])
             dst = (item["y2"], item["x2"])
             cmap = plt.get_cmap("tab10")
-            # Draw values
-            for channel in range(number_of_channels):
-                new_color = cmap.colors[channel]
-                if number_of_channels == 2:
-                    values = measure.profile_line(
-                        # slice - 1, because FIJI starts counting at 1
-                        image[img_slice - 1, channel, :, :],
-                        src,
-                        dst,
-                        line_width,
-                        mode="constant",
-                    )
-                elif number_of_channels == 3:
-                    values = measure.profile_line(
-                        image[img_slice - 1, :, :, channel],
-                        src,
-                        dst,
-                        line_width,
-                        mode="constant",
-                    )
-                else:
-                    raise ValueError(
-                        f"Your channel number: {number_of_channels} is not supported."
-                    )
+            for disp_num, disp_channel in enumerate(disp_channels):
+                new_color = cmap.colors[disp_num]
+                # Draw values of the lines in each channel
+                values = measure_line_values(
+                    image,
+                    disp_channel,
+                    img_slice,
+                    src,
+                    dst,
+                    line_width,
+                    number_of_channels,
+                )
                 axs[item_num, 0].plot(
                     range(len(values)), min_max_normalization(values), color=new_color
                 )
-            # Draw images with lines for the set of channels to display
-            for disp_num, disp_channel in enumerate(disp_channels):
-                new_color = cmap.colors[disp_num]
+                # Draw images of channels to display
                 if number_of_channels == 2:
                     axs[item_num, 1 + disp_num].imshow(
                         image[img_slice - 1, disp_channel, :, :], cmap="gray"
@@ -88,6 +116,7 @@ def plot_line_profiles(image_path, roi_path, number_of_channels, line_width=1):
                     raise ValueError(
                         f"Your channel number: {number_of_channels} is not supported."
                     )
+                # Draw lines onto the images
                 x_values = [item["x1"], item["x2"]]
                 y_values = [item["y1"], item["y2"]]
                 axs[item_num, 1 + disp_num].plot(x_values, y_values, color=new_color)
