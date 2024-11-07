@@ -55,7 +55,7 @@ def plot_line_profiles(image_path, roi_path, number_of_channels, line_width=1):
 
     if number_of_channels == 2:
         disp_channels = [0, 1]
-    if number_of_channels == 3:
+    elif number_of_channels == 3:
         disp_channels = [0, 1, 2]
     else:
         raise ValueError(
