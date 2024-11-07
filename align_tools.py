@@ -101,17 +101,13 @@ def linescan_2c(
     image_peaks = [[], []]
     for single_image, single_roi in zip(image_path, roi_path):
         roi = read_roi(single_roi)
-        # print(roi)
         image = io.imread(single_image)
-        # print(image.shape)
-        # plt.imshow(image[10,0,:,:],cmap="gray")
 
         # generate a color map iterator
         cmap = plt.get_cmap("tab10")
-        colors = iter(cmap.colors)
 
         for channel in range(number_of_channels):
-            newcolor = next(colors)
+            color = cmap.colors[channel]
             # print(newcolor)
             channel_max = []
             # scaling=1
@@ -119,61 +115,34 @@ def linescan_2c(
                 img_slice = item["position"]["slice"]
                 src = (item["y1"], item["x1"])
                 dst = (item["y2"], item["x2"])
-                # values_align_channel = measure_line_values(
-                #     image, align_channel, img_slice -1, src, dst, 5, number_of_channels
-                # )
 
-                # polinomial = np.poly1d(
-                #     np.polyfit(np.arange(0, len(values_align_channel)), values_align_channel, 10)
-                # )
-                # max_number = 50
-                # t = np.linspace(
-                #     0, max(np.arange(0, len(values_align_channel))), max_number
-                # )
-
-                # # get highest peak
-                # peaks, heights = signal.find_peaks(polinomial(t), max(values_align_channel) * 0.6)
-                # heights = heights["peak_heights"].tolist()
-                # # biggest_peak = heights.index(max(heights))
-                # values_align_channel = values_align_channel.tolist()
-                # # offset = (peaks[biggest_peak]/max_number)*max(np.arange(0,len(y_align))*pixelsize)
-                # # Hack:
-                # biggest_peak = values_align_channel.index(max(values_align_channel))
-
-                # max_number = len(values_align_channel)
-
-                ##HACK
-                # slice - 1, because FIJI starts counting at 1
-                values_dna_channel = measure_line_values(
+                #Calcualte offset for half_maximum
+                values_align_channel = measure_line_values(
                     image, align_channel, img_slice - 1, src, dst, line_width, number_of_channels
                 )
-                polinomial = np.poly1d(np.polyfit(np.arange(0, len(values_dna_channel)), values_dna_channel, 10))
-                number_of_interpolation_points = 10*len(values_dna_channel)
-                t = np.linspace(0, max(np.arange(0, len(values_dna_channel))), number_of_interpolation_points)
+                polinomial = np.poly1d(np.polyfit(np.arange(0, len(values_align_channel)), values_align_channel, 10))
+                number_of_interpolation_points = 10*len(values_align_channel)
+                t = np.linspace(0, max(np.arange(0, len(values_align_channel))), number_of_interpolation_points)
                 values_polinomial = (polinomial(t) - min(polinomial(t))) / (max(polinomial(t)) - min(polinomial(t)))
                 closest = find_first_half(values_polinomial)
                 offset = t[closest]
 
+                #Saves the align_channel - offset = 0
                 if channel == align_channel:
                     channel_max.append((t[closest] - offset) * scaling)
-                    # plt.plot(t[closest]-offset, 0.5, marker='o', markersize=3, color="red")
-
+                
+                #Caluclates the peak in another channel, saves it minus offset
                 if channel != align_channel:
-                    y3 = measure_line_values(
-                    image, channel, img_slice -1, src, dst, line_width, number_of_channels
+                    value_peak_channel = measure_line_values(
+                        image, channel, img_slice -1, src, dst, line_width, number_of_channels
                     )
 
-                    polinomial = np.poly1d(np.polyfit(np.arange(0, len(y3)), y3, 10))
-                    number_of_interpolation_points = len(y3)
+                    polinomial = np.poly1d(np.polyfit(np.arange(0, len(value_peak_channel)), value_peak_channel, 10))
+                    number_of_interpolation_points = len(value_peak_channel)
                     t = np.linspace(
-                        0, max(np.arange(0, len(y3))), number_of_interpolation_points
+                        0, max(np.arange(0, len(value_peak_channel))), number_of_interpolation_points
                     )
-                    # axs.plot((t-offset),(y3-min(y3))/(max(y3)-min(y3)),color = "red")
-                    # get highest peak
                     peaks, heights = signal.find_peaks(polinomial(t), max(polinomial(t)) * 0.6)
-                    # print(peaks)
-                    # print(heights)
-
                     heights = heights["peak_heights"].tolist()
                     try:
                         biggest_peak2 = heights.index(max(heights))
@@ -181,41 +150,33 @@ def linescan_2c(
                     except:
                         peak_point = float("NaN")
                         print(single_roi)
-                    # peak_point = peaks[biggest_peak2]
                     channel_max.append((peak_point - offset) * scaling)
-                    # print(peak_point)
-                    # plt.plot(peak_point-offset, 1, marker='o', markersize=3, color="red")
 
-                ##end_HACK
-
-                # offset = biggest_peak
-                # measure:
-                y = measure_line_values(
+                #Plots all the values - normalized and aligned
+                value_channel = measure_line_values(
                     image, channel, img_slice - 1, src, dst, line_width, number_of_channels
                 )
                 if normalize == True:
                     if align == True:
                         axs.plot(
-                            (np.arange(0, len(y)) - offset) * scaling,
-                            (y - min(y)) / (max(y) - min(y)),
-                            color=newcolor,
+                            (np.arange(0, len(value_channel)) - offset) * scaling,
+                            (value_channel - min(value_channel)) / (max(value_channel) - min(value_channel)),
+                            color=color,
                         )
-                        # plt.hlines(0.5, -2, 2)
                     else:
                         axs.plot(
-                            (np.arange(0, len(y))),
-                            (y - min(y)) / (max(y) - min(y)),
-                            color=newcolor,
+                            (np.arange(0, len(value_channel))),
+                            (value_channel - min(value_channel)) / (max(value_channel) - min(value_channel)),
+                            color=color,
                         )
                 else:
-                    axs.plot(np.arange(0, len(y)), y, color=newcolor)
+                    axs.plot(np.arange(0, len(value_channel)), value_channel, color=color)
             image_peaks[channel].extend(channel_max)
 
-    #  print(image_peaks)
     df = pd.DataFrame(image_peaks)
     df = df.transpose()
     df.columns = channels
-    # print(df)
+
     fig, axs = plt.subplots(1)
     if align_channel == 0:
         sns.swarmplot(data=df.iloc[:, ::-1])
