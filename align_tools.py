@@ -1,4 +1,3 @@
-
 from scipy import signal
 import seaborn as sns
 import matplotlib.pyplot as plt
@@ -6,6 +5,7 @@ from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 import numpy as np
 from scipy import ndimage as ndi
 import skimage
+from skimage import io
 import pandas as pd
 import seaborn as sns
 from scipy import stats
@@ -14,7 +14,7 @@ import pandas as pd
 from pathlib import Path
 import scipy.stats
 from read_roi import read_roi_zip, read_roi_file
-
+from .vis_tools import measure_line_values, read_roi
 
 def linescan(
     image_path,
@@ -22,50 +22,72 @@ def linescan(
     channels,
     number_of_channels,
     align_channel,
-    align_method,
+    measure_channel,
     normalize=True,
-    pixelsize=1,
+    scaling=0.03525845591290619,
     align=True,
 ):
-    if (number_of_channels == 2) and (align_method == "half_max"):
-        result_df = linescan_half_alingne_lagacy_2c_dnafirst(
+    if number_of_channels == 2:
+        result_df = linescan_2c(
             image_path,
             roi_path,
             channels,
-            number_of_channels=2,
             # This is hacked so bad
             align_channel=align_channel,
-            normalize=True,
-            pixelsize=pixelsize,
+            normalize=normalize,
+            scaling=scaling,
             align=align,
         )
         # print(result_df)
         return result_df
-    elif (number_of_channels == 3) and (align_method == "half_max"):
-        result_df = linescan_half_alingne_lagacy_3c(
+    elif number_of_channels == 3:
+        result_df = linescan_3c(
             image_path,
             roi_path,
             channels,
-            number_of_channels=3,
             align_channel=align_channel,
-            normalize=True,
-            pixelsize=pixelsize,
+            measure_channel=measure_channel,
+            normalize=normalize,
+            scaling=scaling,
             align=align,
         )
         # print(result_df)
         return result_df
 
-def linescan_half_alingne_lagacy_2c_dnafirst(
+
+def linescan_3c(
     image_path,
     roi_path,
     channels,
-    number_of_channels,
     align_channel,
+    measure_channel,
+    scaling,
     normalize=True,
-    pixelsize=1,
+    align=True,
+):
+    return linescan_2c(
+        image_path,
+        roi_path,
+        channels,
+        align_channel,
+        normalize=True,
+        scaling=scaling,
+        align=True,
+    )
+
+
+def linescan_2c(
+    image_path,
+    roi_path,
+    channels,
+    align_channel,
+    scaling,
+    normalize=True,
     align=True,
 ):
     # get roi and image
+    line_width = 5
+    number_of_channels = 2
     scaling = 0.03525845591290619
 
     def find_nearest(array, value):
@@ -81,13 +103,10 @@ def linescan_half_alingne_lagacy_2c_dnafirst(
         return i
 
     # create plot canvas
-    fig, axs = plt.subplots(1, 1, figsize=(10, 5))
+    _ , axs = plt.subplots(1, 1, figsize=(10, 5))
     image_peaks = [[], []]
     for single_image, single_roi in zip(image_path, roi_path):
-        if single_roi.find(".zip") == -1:
-            roi = read_roi_file(single_roi)
-        else:
-            roi = read_roi_zip(single_roi)
+        roi = read_roi(single_roi)
         # print(roi)
         image = io.imread(single_image)
         # print(image.shape)
@@ -106,54 +125,47 @@ def linescan_half_alingne_lagacy_2c_dnafirst(
                 img_slice = item["position"]["slice"]
                 src = (item["y1"], item["x1"])
                 dst = (item["y2"], item["x2"])
-                y_align = skimage.measure.profile_line(
-                    image[img_slice - 1, align_channel, :, :],
-                    src,
-                    dst,
-                    5,
-                    mode="constant",
+                values_align_channel = measure_line_values(
+                    image, align_channel, img_slice -1, src, dst, 5, number_of_channels
                 )
 
-                p = np.poly1d(
-                    np.polyfit(np.arange(0, len(y_align)) * pixelsize, y_align, 10)
+                polinomial = np.poly1d(
+                    np.polyfit(np.arange(0, len(values_align_channel)), values_align_channel, 10)
                 )
                 max_number = 50
                 t = np.linspace(
-                    0, max(np.arange(0, len(y_align)) * pixelsize), max_number
+                    0, max(np.arange(0, len(values_align_channel))), max_number
                 )
 
                 # get highest peak
-                peaks, heights = signal.find_peaks(p(t), max(y_align) * 0.6)
+                peaks, heights = signal.find_peaks(polinomial(t), max(values_align_channel) * 0.6)
                 heights = heights["peak_heights"].tolist()
                 # biggest_peak = heights.index(max(heights))
-                y_align = y_align.tolist()
+                values_align_channel = values_align_channel.tolist()
                 # offset = (peaks[biggest_peak]/max_number)*max(np.arange(0,len(y_align))*pixelsize)
                 # Hack:
-                biggest_peak = y_align.index(max(y_align))
+                biggest_peak = values_align_channel.index(max(values_align_channel))
 
-                max_number = len(y_align)
+                max_number = len(values_align_channel)
 
                 ##HACK
-                dna = skimage.measure.profile_line(
-                    image[img_slice - 1, align_channel, :, :],
-                    src,
-                    dst,
-                    5,
-                    mode="constant",
+                # slice - 1, because FIJI starts counting at 1
+                values_dna_channel = measure_line_values(
+                    image, align_channel, img_slice - 1, src, dst, 5, number_of_channels
                 )
-                p = np.poly1d(np.polyfit(np.arange(0, len(dna)) * pixelsize, dna, 10))
+                polinomial = np.poly1d(np.polyfit(np.arange(0, len(values_dna_channel)), values_dna_channel, 10))
                 max_number = 10000
                 # max_number=len(y_align)*1000
-                t = np.linspace(0, max(np.arange(0, len(dna)) * pixelsize), max_number)
+                t = np.linspace(0, max(np.arange(0, len(values_dna_channel))), max_number)
                 # print(len(t))
-                yy = (p(t) - min(p(t))) / (max(p(t)) - min(p(t)))
+                values_polinomial = (polinomial(t) - min(polinomial(t))) / (max(polinomial(t)) - min(polinomial(t)))
                 ##print(yy)
 
                 # offset=biggest_peak
                 # print("a")
-                pt = yy.tolist()
+                pt = values_polinomial.tolist()
                 # closest = pt.index(find_nearest(yy,max(yy)/2))
-                closest = find_first_half(yy)
+                closest = find_first_half(values_polinomial)
                 offset = t[closest]
                 # def func1(u):
                 #    return ((p(u)-min(p(u)))/(max(p(u))-min(p(u))))-(1/2)
@@ -162,21 +174,18 @@ def linescan_half_alingne_lagacy_2c_dnafirst(
                     # plt.plot(t[closest]-offset, 0.5, marker='o', markersize=3, color="red")
 
                 if channel != align_channel:
-                    y3 = skimage.measure.profile_line(
-                        image[img_slice - 1, channel, :, :],
-                        src,
-                        dst,
-                        10,
-                        mode="constant",
-                    )
-                    p = np.poly1d(np.polyfit(np.arange(0, len(y3)) * pixelsize, y3, 10))
+                    y3 = measure_line_values(
+                    image, channel, img_slice -1, src, dst, 10, number_of_channels
+                )
+
+                    polinomial = np.poly1d(np.polyfit(np.arange(0, len(y3)), y3, 10))
                     max_number = len(y3)
                     t = np.linspace(
-                        0, max(np.arange(0, len(y3)) * pixelsize), max_number
+                        0, max(np.arange(0, len(y3))), max_number
                     )
                     # axs.plot((t-offset),(y3-min(y3))/(max(y3)-min(y3)),color = "red")
                     # get highest peak
-                    peaks, heights = signal.find_peaks(p(t), max(p(t)) * 0.6)
+                    peaks, heights = signal.find_peaks(polinomial(t), max(polinomial(t)) * 0.6)
                     # print(peaks)
                     # print(heights)
 
@@ -192,20 +201,6 @@ def linescan_half_alingne_lagacy_2c_dnafirst(
                     # print(peak_point)
                     # plt.plot(peak_point-offset, 1, marker='o', markersize=3, color="red")
 
-                # print(func(29))
-                # print(f"clo: {closest}")
-                # print(t[closest]-offset*pixelsize)
-                # x = fsolve(func1,closest)
-                # print(f'root: {x} - {func1(x[0])}')
-
-                # axs.plot((t-offset),yy,color = "red")
-
-                # if (channel == align_channel):
-                #     channel_max.append((biggest_peak - offset) * scaling)
-                # if (channel != align_channel and channel != 0):
-                #     channel_max.append((peak_point-offset) * scaling)
-                # plt.plot(peak_point-offset, 1, marker='o', markersize=3, color="red")
-
                 ##end_HACK
 
                 # offset = biggest_peak
@@ -216,22 +211,22 @@ def linescan_half_alingne_lagacy_2c_dnafirst(
                 if normalize == True:
                     if align == True:
                         axs.plot(
-                            (np.arange(0, len(y)) - offset) * pixelsize * scaling,
+                            (np.arange(0, len(y)) - offset) * scaling,
                             (y - min(y)) / (max(y) - min(y)),
                             color=newcolor,
                         )
                         # plt.hlines(0.5, -2, 2)
                     else:
                         axs.plot(
-                            (np.arange(0, len(y))) * pixelsize,
+                            (np.arange(0, len(y))),
                             (y - min(y)) / (max(y) - min(y)),
                             color=newcolor,
                         )
                 else:
-                    axs.plot(np.arange(0, len(y)) * pixelsize, y, color=newcolor)
+                    axs.plot(np.arange(0, len(y)), y, color=newcolor)
             image_peaks[channel].extend(channel_max)
 
-   #  print(image_peaks)
+    #  print(image_peaks)
     df = pd.DataFrame(image_peaks)
     df = df.transpose()
     df.columns = channels

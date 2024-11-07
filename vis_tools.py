@@ -27,8 +27,7 @@ def measure_line_values(
     """Uses measure.profile_line from skimage to get values along a line, width can be specified."""
     if number_of_channels == 2:
         values = measure.profile_line(
-            # slice - 1, because FIJI starts counting at 1
-            image[img_slice - 1, channel, :, :],
+            image[img_slice, channel, :, :],
             src,
             dst,
             line_width,
@@ -36,7 +35,7 @@ def measure_line_values(
         )
     elif number_of_channels == 3:
         values = measure.profile_line(
-            image[img_slice - 1, :, :, channel],
+            image[img_slice, :, :, channel],
             src,
             dst,
             line_width,
@@ -85,10 +84,11 @@ def plot_line_profiles(image_path, roi_path, number_of_channels, line_width=1):
         for disp_num, disp_channel in enumerate(disp_channels):
             new_color = cmap.colors[disp_num]
             # Draw values of the lines in each channel
+            # slice - 1, because FIJI starts counting at 1
             values = measure_line_values(
                 image,
                 disp_channel,
-                img_slice,
+                img_slice - 1,
                 src,
                 dst,
                 line_width,
