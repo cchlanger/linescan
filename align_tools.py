@@ -1,19 +1,12 @@
 from scipy import signal
 import seaborn as sns
 import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 import numpy as np
-from scipy import ndimage as ndi
-import skimage
 from skimage import io
 import pandas as pd
 import seaborn as sns
-from scipy import stats
-from scipy.signal import chirp, find_peaks, peak_widths
 import pandas as pd
 from pathlib import Path
-import scipy.stats
-from read_roi import read_roi_zip, read_roi_file
 from .vis_tools import measure_line_values, read_roi
 
 def linescan(
@@ -23,6 +16,7 @@ def linescan(
     number_of_channels,
     align_channel,
     measure_channel,
+    line_width = 5,
     normalize=True,
     scaling=0.03525845591290619,
     align=True,
@@ -34,6 +28,7 @@ def linescan(
             channels,
             # This is hacked so bad
             align_channel=align_channel,
+            line_width=line_width,
             normalize=normalize,
             scaling=scaling,
             align=align,
@@ -82,13 +77,12 @@ def linescan_2c(
     channels,
     align_channel,
     scaling,
+    line_width,
     normalize=True,
     align=True,
 ):
     # get roi and image
-    line_width = 5
     number_of_channels = 2
-    scaling = 0.03525845591290619
 
     def find_nearest(array, value):
         array = np.asarray(array)
@@ -125,63 +119,54 @@ def linescan_2c(
                 img_slice = item["position"]["slice"]
                 src = (item["y1"], item["x1"])
                 dst = (item["y2"], item["x2"])
-                values_align_channel = measure_line_values(
-                    image, align_channel, img_slice -1, src, dst, 5, number_of_channels
-                )
+                # values_align_channel = measure_line_values(
+                #     image, align_channel, img_slice -1, src, dst, 5, number_of_channels
+                # )
 
-                polinomial = np.poly1d(
-                    np.polyfit(np.arange(0, len(values_align_channel)), values_align_channel, 10)
-                )
-                max_number = 50
-                t = np.linspace(
-                    0, max(np.arange(0, len(values_align_channel))), max_number
-                )
+                # polinomial = np.poly1d(
+                #     np.polyfit(np.arange(0, len(values_align_channel)), values_align_channel, 10)
+                # )
+                # max_number = 50
+                # t = np.linspace(
+                #     0, max(np.arange(0, len(values_align_channel))), max_number
+                # )
 
-                # get highest peak
-                peaks, heights = signal.find_peaks(polinomial(t), max(values_align_channel) * 0.6)
-                heights = heights["peak_heights"].tolist()
-                # biggest_peak = heights.index(max(heights))
-                values_align_channel = values_align_channel.tolist()
-                # offset = (peaks[biggest_peak]/max_number)*max(np.arange(0,len(y_align))*pixelsize)
-                # Hack:
-                biggest_peak = values_align_channel.index(max(values_align_channel))
+                # # get highest peak
+                # peaks, heights = signal.find_peaks(polinomial(t), max(values_align_channel) * 0.6)
+                # heights = heights["peak_heights"].tolist()
+                # # biggest_peak = heights.index(max(heights))
+                # values_align_channel = values_align_channel.tolist()
+                # # offset = (peaks[biggest_peak]/max_number)*max(np.arange(0,len(y_align))*pixelsize)
+                # # Hack:
+                # biggest_peak = values_align_channel.index(max(values_align_channel))
 
-                max_number = len(values_align_channel)
+                # max_number = len(values_align_channel)
 
                 ##HACK
                 # slice - 1, because FIJI starts counting at 1
                 values_dna_channel = measure_line_values(
-                    image, align_channel, img_slice - 1, src, dst, 5, number_of_channels
+                    image, align_channel, img_slice - 1, src, dst, line_width, number_of_channels
                 )
                 polinomial = np.poly1d(np.polyfit(np.arange(0, len(values_dna_channel)), values_dna_channel, 10))
-                max_number = 10000
-                # max_number=len(y_align)*1000
-                t = np.linspace(0, max(np.arange(0, len(values_dna_channel))), max_number)
-                # print(len(t))
+                number_of_interpolation_points = 10*len(values_dna_channel)
+                t = np.linspace(0, max(np.arange(0, len(values_dna_channel))), number_of_interpolation_points)
                 values_polinomial = (polinomial(t) - min(polinomial(t))) / (max(polinomial(t)) - min(polinomial(t)))
-                ##print(yy)
-
-                # offset=biggest_peak
-                # print("a")
-                pt = values_polinomial.tolist()
-                # closest = pt.index(find_nearest(yy,max(yy)/2))
                 closest = find_first_half(values_polinomial)
                 offset = t[closest]
-                # def func1(u):
-                #    return ((p(u)-min(p(u)))/(max(p(u))-min(p(u))))-(1/2)
+
                 if channel == align_channel:
                     channel_max.append((t[closest] - offset) * scaling)
                     # plt.plot(t[closest]-offset, 0.5, marker='o', markersize=3, color="red")
 
                 if channel != align_channel:
                     y3 = measure_line_values(
-                    image, channel, img_slice -1, src, dst, 10, number_of_channels
-                )
+                    image, channel, img_slice -1, src, dst, line_width, number_of_channels
+                    )
 
                     polinomial = np.poly1d(np.polyfit(np.arange(0, len(y3)), y3, 10))
-                    max_number = len(y3)
+                    number_of_interpolation_points = len(y3)
                     t = np.linspace(
-                        0, max(np.arange(0, len(y3))), max_number
+                        0, max(np.arange(0, len(y3))), number_of_interpolation_points
                     )
                     # axs.plot((t-offset),(y3-min(y3))/(max(y3)-min(y3)),color = "red")
                     # get highest peak
@@ -205,8 +190,8 @@ def linescan_2c(
 
                 # offset = biggest_peak
                 # measure:
-                y = skimage.measure.profile_line(
-                    image[img_slice - 1, channel, :, :], src, dst, 10, mode="constant"
+                y = measure_line_values(
+                    image, channel, img_slice - 1, src, dst, line_width, number_of_channels
                 )
                 if normalize == True:
                     if align == True:
