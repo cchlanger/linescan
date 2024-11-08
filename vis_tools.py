@@ -47,10 +47,21 @@ def measure_line_values(
 
 
 def plot_line_profiles(image_path, roi_path, number_of_channels, line_width=1):
-    """Plots every every linescan together with the image slice it was drawn on.
-    Colors represent the individual channels, the line drawn is diplayed on top of the image.
-    The line profiles is normalized.(In future and the fitting and peak calling can be displayed).
-    Values are in pixel."""
+    """Plots every linescan together with the image slice it was drawn on.
+
+  Colors represent the individual channels, the line drawn is displayed on top of the image.
+  The line profile is normalized. (In future, fitting and peak calling can be displayed).
+  Values are in pixels.
+
+  Args:
+      image_path (str): Path to the image file.
+      roi_path (str): Path to the ROI file.
+      number_of_channels (int): The number of channels in the image.
+      line_width (int, optional): The width of the line. Defaults to 1.
+
+  Raises:
+      ValueError: If the number of channels is not supported.
+  """
 
     if number_of_channels == 2:
         disp_channels = [0, 1]

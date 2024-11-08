@@ -21,6 +21,30 @@ def linescan(
     scaling=0.03525845591290619,
     align=True,
 ):
+    """Performs linescan analysis on images based on provided ROIs.
+
+    This function analyzes line profiles across specified channels of images, aligning and normalizing the data if requested.
+    It supports both 2-channel and 3-channel images (currently, 3-channel analysis defaults to a 2-channel implementation).
+
+    Args:
+        image_path (list): List of paths to the image files.
+        roi_path (list): List of paths to the corresponding ROI files.
+        channels (list): List of channel names (e.g., ['DAPI', 'GFP']).
+        number_of_channels (int): Number of channels in the images (2 or 3).
+        align_channel (int): Index of the channel used for alignment (0-based).
+        measure_channel (int): Index of the channel to measure (0-based).
+        line_width (int, optional): Width of the line profile. Defaults to 5.
+        normalize (bool, optional): Whether to normalize the line profiles. Defaults to True.
+        scaling (float, optional): Scaling factor for the x-axis. Defaults to 0.03525845591290619.
+        align (bool, optional): Whether to align the line profiles. Defaults to True.
+
+    Returns:
+        pandas.DataFrame: DataFrame containing the linescan data, with columns corresponding to the channel names.
+                            Includes peak locations for the specified channels, potentially after alignment and normalization.
+
+    Raises:
+        ValueError: If an unsupported number of channels is provided.
+    """
     if number_of_channels == 2:
         result_df = linescan_2c(
             image_path,
