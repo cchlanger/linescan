@@ -65,3 +65,4 @@ TODO add notbooks of Claudia and Caelan
     - remove destinction between 2 and 3 channel in the code
     - catch bad user input
     - for aligned_channel calculate and display a liner interpolation between the closest values instead of the fitted model value (which now is always zero)
+    - use the line_width of ROI if available
