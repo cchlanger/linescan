@@ -185,6 +185,7 @@ def linescan_2c(
 
     df = pd.DataFrame(image_peaks)
     df = df.transpose()
+    channels = [channels[i] for i in [measure_channel,align_channel]]
     df.columns = channels
 
     fig, axs = plt.subplots(1)
