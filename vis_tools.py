@@ -2,6 +2,7 @@
 
 from read_roi import read_roi_zip, read_roi_file
 import matplotlib.pyplot as plt
+from matplotlib.colors import ListedColormap
 from skimage import io, measure
 
 
@@ -91,7 +92,9 @@ def plot_line_profiles(image_path, roi_path, number_of_channels, line_width=1):
         img_slice = item["position"]["slice"]
         src = (item["y1"], item["x1"])
         dst = (item["y2"], item["x2"])
-        cmap = plt.get_cmap("tab10")
+        cmap = ListedColormap(['limegreen', 'magenta'])
+        #plt.get_cmap("tab10")
+        
         for disp_num, disp_channel in enumerate(disp_channels):
             new_color = cmap.colors[disp_num]
             # Draw values of the lines in each channel

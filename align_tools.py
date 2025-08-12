@@ -1,12 +1,15 @@
 from scipy import signal
 import seaborn as sns
 import matplotlib.pyplot as plt
+from matplotlib.colors import ListedColormap
 import numpy as np
 from skimage import io
 import pandas as pd
 import seaborn as sns
 import pandas as pd
 from pathlib import Path
+from lmfit import models
+from lmfit import Model
 from .vis_tools import measure_line_values, read_roi
 
 def linescan(
@@ -110,7 +113,7 @@ def linescan_2c(
         image = io.imread(single_image)
 
         # generate a color map iterator
-        cmap = plt.get_cmap("tab10")
+        cmap = ListedColormap(['limegreen', 'magenta'])
         for channel in range(number_of_channels):
             #color = cmap.colors[channel]
             if channel == measure_channel: color = cmap.colors[0]
@@ -172,16 +175,76 @@ def linescan_2c(
                                 (value_channel - min(value_channel)) / (max(value_channel) - min(value_channel)),
                                 color=color,
                             )
+                            if channel == align_channel:
+                                # Create interpolated polynomial for plotting
+                                polinomial_plot = np.poly1d(np.polyfit(np.arange(0, len(value_channel)), value_channel, 10))
+                                t_plot = np.linspace(0, len(value_channel)-1, len(value_channel)*3)
+                                interpolated_values = polinomial_plot(t_plot)
+                                interpolated_values_norm = (interpolated_values - min(interpolated_values)) / (max(interpolated_values) - min(interpolated_values))
+                                axs.plot((t_plot - offset) * scaling, interpolated_values_norm, color=color, linestyle='--', alpha=0.9, linewidth=1.5)
+
+                                # Define sigmoid function
+                                # def sigmoid(x, amplitude, center, sigma, offset):
+                                #     return amplitude / (1 + np.exp(-(x - center) / sigma)) + offset
+
+
+                                # # Fit sigmoid model
+                                # x_data = np.arange(0, len(value_channel))
+                                # y_data = value_channel
+
+                                # # Create sigmoid model
+                                # sigmoid_model = Model(sigmoid)
+
+                                # # Set initial parameters
+                                # params = sigmoid_model.make_params(
+                                #     amplitude=max(y_data) - min(y_data),
+                                #     center=len(y_data) / 2,
+                                #     sigma=len(y_data) / 10,
+                                #     offset=min(y_data)
+                                # )
+                                # result = sigmoid_model.fit(y_data, params, x=x_data)
+    
+                                # # Generate high-resolution x for smooth curve
+                                # t_plot = np.linspace(0, len(value_channel)-1, len(value_channel)*3)
+                                # sigmoid_fit = result.eval(x=t_plot)
+                                # sigmoid_fit_norm = (sigmoid_fit - min(sigmoid_fit)) / (max(sigmoid_fit) - min(sigmoid_fit))
+                                # axs.plot((t_plot - offset) * scaling, sigmoid_fit_norm, color=color, linestyle=':', alpha=0.9, linewidth=1.5)
+
+                            if channel == measure_channel:
+                                # Fit Gaussian model
+                                x_data = np.arange(0, len(value_channel))
+                                y_data = value_channel
+
+                                # Create Gaussian model
+                                gauss_model = models.GaussianModel()
+                                params = gauss_model.guess(y_data, x=x_data)
+                                result = gauss_model.fit(y_data, params, x=x_data)
+        
+                                # Generate high-resolution x for smooth curve
+                                t_plot = np.linspace(0, len(value_channel)-1, len(value_channel)*3)
+                                gaussian_fit = result.eval(x=t_plot)
+
+                                gaussian_fit_norm = (gaussian_fit - min(gaussian_fit)) / (max(gaussian_fit) - min(gaussian_fit))
+                                axs.plot((t_plot - offset) * scaling, gaussian_fit_norm, color=color, linestyle='--', alpha=0.9, linewidth=1.5)
+
+
+                            axs.set_xlim(-2,3.5)
+                            #axs.plot(linewidth=7.0)
                         else:
                             axs.plot(
                                 (np.arange(0, len(value_channel))),
                                 (value_channel - min(value_channel)) / (max(value_channel) - min(value_channel)),
                                 color=color,
                             )
+                            axs.set_xlim(-2,3.5)
+                          #  axs.plot(linewidth=7.0)
                     else:
                         axs.plot(np.arange(0, len(value_channel)), value_channel, color=color)
+                        axs.set_xlim(-2,3)
             if channel == measure_channel: image_peaks[0].extend(channel_max)
             if channel == align_channel: image_peaks[1].extend(channel_max)
+            #Shade magenta
+            # axs.axvspan(0, max(t_plot) * scaling, facecolor='#DC02D9', alpha=0.2)
 
     df = pd.DataFrame(image_peaks)
     df = df.transpose()
