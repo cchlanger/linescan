@@ -13,7 +13,7 @@ def linescan(
     image_path,
     roi_path,
     channels,
-    number_of_channels,   # still accepted, passed through to measure_line_values
+    number_of_channels,   # passed through to measure_line_values (layout/indexing handled downstream)
     align_channel,
     measure_channel,
     line_width=5,
@@ -21,52 +21,45 @@ def linescan(
     scaling=0.03525845591290619,
     align=True,
 ):
-    """Performs linescan analysis on images based on provided ROIs.
+    """
+    Perform linescan analysis on images using ROI line segments.
 
-    This function analyzes line profiles across specified channels of images, aligning and normalizing the data if requested.
+    For each ROI line segment, this function:
+    1) extracts the line profile from the align_channel, fits a polynomial (deg=10) and
+       finds the first half-maximum crossing on the smoothed curve to define an offset;
+    2) extracts the line profile from the measure_channel, fits a polynomial (deg=10),
+       finds the most prominent peak, and reports the peak position relative to the offset;
+    3) optionally plots normalized profiles for both channels, aligned by the offset, and
+       overlays a dashed polynomial fit for the align channel and a dashed Gaussian fit
+       for the measure channel (via lmfit).
+
+    Notes:
+    - number_of_channels is not used for branching here; it is forwarded to measure_line_values
+      so that indexing/layout can be handled centrally in vis_tools.
+    - channels should be a list of channel names; the returned DataFrame columns will be
+      [channels[measure_channel], channels[align_channel]] in that order.
+    - Plots are produced as a side-effect (per-ROI profiles and two summary plots: swarm and box).
 
     Args:
-        image_path (list): List of paths to the image files.
-        roi_path (list): List of paths to the corresponding ROI files.
-        channels (list): List of channel names (e.g., ['DAPI', 'GFP']).
-        number_of_channels (int): Number of channels in the images (kept for compatibility with measure_line_values).
-        align_channel (int): Index of the channel used for alignment (0-based).
-        measure_channel (int): Index of the channel to measure (0-based).
-        line_width (int, optional): Width of the line profile. Defaults to 5.
-        normalize (bool, optional): Whether to normalize the line profiles. Defaults to True.
-        scaling (float, optional): Scaling factor for the x-axis. Defaults to 0.03525845591290619.
-        align (bool, optional): Whether to align the line profiles. Defaults to True.
+        image_path (list[str]): Paths to the image files.
+        roi_path (list[str]): Paths to the corresponding ROI files (.roi or .zip).
+        channels (list[str]): Channel display names, e.g., ['DAPI', 'GFP'].
+        number_of_channels (int): Total channel count; forwarded to measure_line_values for indexing.
+        align_channel (int): 0-based channel index used to compute the alignment offset.
+        measure_channel (int): 0-based channel index used to measure the peak position.
+        line_width (int, optional): Width (in pixels) of the line profile. Defaults to 5.
+        normalize (bool, optional): If True, profiles are min-max normalized for plotting. Defaults to True.
+        scaling (float, optional): X-axis scaling factor to convert pixel indices to physical units. Defaults to 0.03525845591290619.
+        align (bool, optional): If True, x-axes are shifted by the computed offset for aligned plotting. Defaults to True.
 
     Returns:
-        pandas.DataFrame: DataFrame containing the linescan data with columns for the specified channels.
+        pandas.DataFrame: Two-column DataFrame with columns:
+            - channels[measure_channel]: peak position of the measure channel relative to the offset (scaled units).
+            - channels[align_channel]: zero reference for the align channel (should be ~0 in scaled units).
+
+    Raises:
+        ValueError: If ROI files are unsupported or other input validation fails downstream.
     """
-    # Single unified path (no 2/3-channel branching)
-    return linescan_core(
-        image_path=image_path,
-        roi_path=roi_path,
-        channels=channels,
-        number_of_channels=number_of_channels,
-        align_channel=align_channel,
-        measure_channel=measure_channel,
-        line_width=line_width,
-        normalize=normalize,
-        scaling=scaling,
-        align=align,
-    )
-
-
-def linescan_core(
-    image_path,
-    roi_path,
-    channels,
-    number_of_channels,
-    align_channel,
-    measure_channel,
-    line_width,
-    normalize,
-    scaling,
-    align,
-):
     def find_first_half(b):
         half_lim = max(b) / 2
         for i, y in enumerate(b):
@@ -74,33 +67,31 @@ def linescan_core(
                 return i
         return int(np.argmax(b))
 
-    # create plot canvas
+    # canvas for per-ROI profile plots
     _, axs = plt.subplots(1, 1, figsize=(10, 5))
-    image_peaks = [[], []]
+    image_peaks = [[], []]  # [measure_offsets, align_offsets]
 
     for single_image, single_roi in zip(image_path, roi_path):
         roi = read_roi(single_roi)
         image = io.imread(single_image)
 
         cmap = ListedColormap(['limegreen', 'magenta'])
-        color_for = {
-            measure_channel: cmap.colors[0],
-            align_channel: cmap.colors[1],
-        }
+        color_for = {measure_channel: cmap.colors[0], align_channel: cmap.colors[1]}
 
         for _, item in roi.items():
             img_slice = item["position"]["slice"]
             src = (item["y1"], item["x1"])
             dst = (item["y2"], item["x2"])
 
-            # Compute offset once from align_channel via first half-maximum on a degree-10 polynomial
+            # Offset from align_channel via first half-maximum on a degree-10 polynomial
             values_align_channel = measure_line_values(
                 image, align_channel, img_slice - 1, src, dst, line_width, number_of_channels
             )
             poly_align = np.poly1d(np.polyfit(np.arange(0, len(values_align_channel)), values_align_channel, 10))
             t_hi = np.linspace(0, len(values_align_channel) - 1, 10 * len(values_align_channel))
             vals_hi = poly_align(t_hi)
-            # normalize safely (avoid divide-by-zero)
+
+            # normalize safely to locate half-maximum
             denom = (np.max(vals_hi) - np.min(vals_hi))
             if denom == 0 or not np.isfinite(denom):
                 vals_norm = np.zeros_like(vals_hi)
@@ -109,13 +100,13 @@ def linescan_core(
             closest = find_first_half(vals_norm)
             offset = t_hi[closest]
 
-            # Process only the two channels of interest
+            # Process only align_channel and measure_channel
             for channel in (align_channel, measure_channel):
                 color = color_for[channel]
                 channel_max = []
 
                 if channel == align_channel:
-                    # By construction this should be ~0 in physical units
+                    # By construction, this evaluates to ~0 in scaled units
                     channel_max.append((t_hi[closest] - offset) * scaling)
 
                 if channel == measure_channel:
@@ -148,7 +139,7 @@ def linescan_core(
                             color=color,
                         )
                         if channel == align_channel:
-                            # dashed poly overlay
+                            # dashed polynomial overlay (align channel)
                             poly_plot = np.poly1d(np.polyfit(np.arange(0, len(value_channel)), value_channel, 10))
                             t_plot = np.linspace(0, len(value_channel) - 1, len(value_channel) * 3)
                             vals_plot = poly_plot(t_plot)
@@ -180,7 +171,7 @@ def linescan_core(
                             # ------------------------------
 
                         if channel == measure_channel:
-                            # Gaussian overlay via lmfit
+                            # Gaussian overlay via lmfit (measure channel)
                             x_data = np.arange(0, len(value_channel))
                             y_data = value_channel
                             gauss_model = models.GaussianModel()
