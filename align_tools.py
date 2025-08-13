@@ -253,8 +253,8 @@ def half_max_offset(values_align_channel, method="poly", poly_degree=10, upsampl
         sig_model = Model(sigmoid)
         params = sig_model.make_params(amplitude=amp0, center=center0, sigma=sigma0, offset0=offset0)
         try:
-            result = sig_model.fit(y, params, x=x)
-            vals_hi = result.eval(x=t_hi)
+            result = sig_model.fit(y, params, xx=x)
+            vals_hi = result.eval(xx=t_hi)
         except Exception:
             poly = np.poly1d(np.polyfit(x, y, poly_degree))
             vals_hi = poly(t_hi)
