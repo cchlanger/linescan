@@ -119,17 +119,13 @@ def linescan(
     df = pd.DataFrame(image_peaks).transpose()
     df.columns = [channels[i] for i in [measure_channel, align_channel]]
 
-    # Summary plots
-    fig, axs = plt.subplots(1)
-    if align_channel == 0:
-        sns.swarmplot(data=df.iloc[:, ::-1])
-    else:
-        sns.swarmplot(data=df)
-    fig, axs = plt.subplots(1)
-    if align_channel == 0:
-        sns.boxplot(data=df.iloc[:, ::-1])
-    else:
-        sns.boxplot(data=df)
+    # Summary plots: measured channel only
+    meas_col = channels[measure_channel]
+    if meas_col in df.columns:
+        fig, ax = plt.subplots(1)
+        sns.swarmplot(data=df[[meas_col]])
+        fig, ax = plt.subplots(1)
+        sns.boxplot(data=df[[meas_col]])
     return df
 
 

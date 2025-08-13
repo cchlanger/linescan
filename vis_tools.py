@@ -98,7 +98,7 @@ def plot_line_profiles(image_path, roi_path, number_of_channels, line_width=1):
         img_slice = item["position"]["slice"]
         src = (item["y1"], item["x1"])
         dst = (item["y2"], item["x2"])
-        cmap = ListedColormap(['limegreen', 'magenta'])
+        cmap = ListedColormap(['limegreen', 'magenta','cyan'])
         #plt.get_cmap("tab10")
         
         for disp_num, disp_channel in enumerate(disp_channels):
