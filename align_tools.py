@@ -22,7 +22,7 @@ def linescan(
     scaling=0.03525845591290619,
     align=True,
     peak_method="gaussian",   # "gaussian" (default) or "poly"
-    align_method="poly",      # "poly" (default) or "sigmoid"
+    align_method="sigmoid",   # DEFAULT NOW "sigmoid" (was "poly")
     plot_mode="both",         # "raw", "fit", or "both"
 ):
     """
@@ -31,8 +31,8 @@ def linescan(
     For each ROI line segment, this function:
     1) extracts the line profile from the align_channel and computes an alignment offset as the
        first half-maximum crossing on a smoothed curve:
-       - If align_method == "poly": fit a degree-10 polynomial, upsample, then find the first 0.5 crossing.
        - If align_method == "sigmoid": fit a sigmoid (via lmfit), evaluate densely, then find the first 0.5 crossing.
+       - If align_method == "poly": fit a degree-10 polynomial, upsample, then find the first 0.5 crossing.
        The same smoothed curve is available for plotting as the align overlay.
     2) extracts the line profile from the measure_channel and estimates the peak position:
        - If peak_method == "gaussian": fits a Gaussian (lmfit) and uses the fitted center parameter as the peak.
@@ -52,7 +52,7 @@ def linescan(
         scaling (float, optional): X-axis scaling factor to convert pixel indices to physical units.
         align (bool, optional): If True, x-axes are shifted by the computed offset for aligned plotting.
         peak_method (str, optional): "gaussian" (default) or "poly" for the peak estimation and measure overlay.
-        align_method (str, optional): "poly" (default) or "sigmoid" for the offset estimation and align overlay.
+        align_method (str, optional): "sigmoid" (default) or "poly" for the offset estimation and align overlay.
         plot_mode (str, optional): "raw", "fit", or "both" to control what is drawn.
 
     Returns:
@@ -140,7 +140,7 @@ def _plot_roi_profiles(
     scaling,
     normalize=True,
     align=True,
-    align_method="poly",
+    align_method="sigmoid",   # DEFAULT NOW "sigmoid"
     peak_method="gaussian",
     t_hi=None,
     vals_hi=None,
@@ -153,7 +153,7 @@ def _plot_roi_profiles(
     Plot a single ROI's align and measure profiles on the given axis.
 
     Raw curves use the input values (optionally normalized and aligned). Fit overlays use:
-    - align_method: "poly" (polynomial smooth) or "sigmoid" (sigmoid fit) via provided t_hi/vals_hi.
+    - align_method: "sigmoid" (sigmoid fit) or "poly" (polynomial smooth) via provided t_hi/vals_hi.
     - peak_method: "gaussian" (Gaussian lmfit) or "poly" (polynomial smooth).
 
     Args:
@@ -164,7 +164,7 @@ def _plot_roi_profiles(
         scaling (float): X scaling factor to physical units.
         normalize (bool): Min-max normalize the y-values for plotting.
         align (bool): Shift x by offset if True.
-        align_method (str): "poly" or "sigmoid" for align overlay.
+        align_method (str): "sigmoid" or "poly" for align overlay.
         peak_method (str): "gaussian" or "poly" for measure overlay.
         t_hi (np.ndarray|None): High-res x used for align fit overlay (from half_max_offset).
         vals_hi (np.ndarray|None): Smoothed align values for overlay (from half_max_offset).
@@ -217,17 +217,17 @@ def _plot_roi_profiles(
         ax.set_xlim(-2, 3.5)
 
 
-def half_max_offset(values_align_channel, method="poly", poly_degree=10, upsample_factor=10):
+def half_max_offset(values_align_channel, method="sigmoid", poly_degree=10, upsample_factor=10):
     """
     Compute alignment offset as the first half-maximum crossing after smoothing.
 
     Methods:
-        - "poly": fit a polynomial (degree=poly_degree), evaluate on a dense grid, take first crossing at 0.5.
         - "sigmoid": fit a sigmoid via lmfit, evaluate on a dense grid, take first crossing at 0.5.
+        - "poly": fit a polynomial (degree=poly_degree), evaluate on a dense grid, take first crossing at 0.5.
 
     Args:
         values_align_channel (array-like): Raw profile of the align channel.
-        method (str, optional): "poly" (default) or "sigmoid".
+        method (str, optional): "sigmoid" (default) or "poly".
         poly_degree (int, optional): Degree of polynomial used for smoothing (poly method only).
         upsample_factor (int, optional): Multiplier for dense sampling.
 
@@ -253,7 +253,7 @@ def half_max_offset(values_align_channel, method="poly", poly_degree=10, upsampl
         sig_model = Model(sigmoid)
         params = sig_model.make_params(amplitude=amp0, center=center0, sigma=sigma0, offset0=offset0)
         try:
-            result = sig_model.fit(y, params, xx=x)
+            result = sig_model.fit(y, params, xx=x)   # match "xx" argument name
             vals_hi = result.eval(xx=t_hi)
         except Exception:
             poly = np.poly1d(np.polyfit(x, y, poly_degree))
