@@ -92,7 +92,8 @@ def linescan(
             peak_point, gaussian_fit_result = peak_calling(measure_values, method=peak_method)
 
             # Collect peak metrics (scaled, relative to offset)
-            image_peaks[1].append((t_hi[np.argmax(_safe_minmax(vals_hi) >= 0.5)] - offset) * scaling)  # align ~0
+            # Use the exact half-max used for offset; align channel should be strictly zero
+            image_peaks[1].append(0.0)
             image_peaks[0].append(((peak_point if np.isfinite(peak_point) else np.nan) - offset) * scaling)
 
             # Plot this ROI (raw, fit, or both)
@@ -190,8 +191,10 @@ def _plot_roi_profiles(
     # Establish per-channel normalization ranges from the RAW curves
     align_raw = np.asarray(align_values, dtype=float)
     measure_raw = np.asarray(measure_values, dtype=float)
-    a_lo, a_hi = np.nanmin(align_raw), np.nanmax(align_raw)
-    m_lo, m_hi = np.nanmin(measure_raw), np.nanmax(measure_raw)
+    a_lo = np.nanmin(align_raw) if np.any(np.isfinite(align_raw)) else 0.0
+    a_hi = np.nanmax(align_raw) if np.any(np.isfinite(align_raw)) else 1.0
+    m_lo = np.nanmin(measure_raw) if np.any(np.isfinite(measure_raw)) else 0.0
+    m_hi = np.nanmax(measure_raw) if np.any(np.isfinite(measure_raw)) else 1.0
 
     def _plot_series(y, color, style='-', use_align_scale=True):
         if normalize:
