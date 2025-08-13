@@ -4,11 +4,17 @@ from read_roi import read_roi_zip, read_roi_file
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
 from skimage import io, measure
-
+import numpy as np
 
 def min_max_normalization(x):
-    """Naive min max normalization."""
-    return (x - min(x)) / (max(x) - min(x))
+    """Safer naive min max normalization."""
+    x = np.asarray(x, dtype=float)
+    xmin = np.min(x)
+    xmax = np.max(x)
+    rng = xmax - xmin
+    if rng == 0 or not np.isfinite(rng):
+        return np.zeros_like(x)
+    return (x - xmin) / rng
 
 
 def read_roi(roi_path):

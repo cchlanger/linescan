@@ -9,6 +9,7 @@ from lmfit import models
 from lmfit import Model
 from .vis_tools import measure_line_values, read_roi
 
+
 def linescan(
     image_path,
     roi_path,
@@ -20,6 +21,7 @@ def linescan(
     normalize=True,
     scaling=0.03525845591290619,
     align=True,
+    peak_method="poly",   # "poly" (default, current behavior) or "gaussian"
 ):
     """
     Perform linescan analysis on images using ROI line segments.
@@ -27,15 +29,15 @@ def linescan(
     For each ROI line segment, this function:
     1) extracts the line profile from the align_channel, fits a polynomial (deg=10) and
        finds the first half-maximum crossing on the smoothed curve to define an offset;
-    2) extracts the line profile from the measure_channel, fits a polynomial (deg=10),
-       finds the most prominent peak, and reports the peak position relative to the offset;
+    2) extracts the line profile from the measure_channel and estimates the peak position:
+       - If peak_method == "poly": fits a polynomial (deg=10), then finds the tallest peak via scipy.signal.find_peaks.
+       - If peak_method == "gaussian": fits a Gaussian (lmfit) and uses the fitted center parameter as the peak;
     3) optionally plots normalized profiles for both channels, aligned by the offset, and
        overlays a dashed polynomial fit for the align channel and a dashed Gaussian fit
-       for the measure channel (via lmfit).
+       for the measure channel (when available).
 
     Notes:
-    - number_of_channels is not used for branching here; it is forwarded to measure_line_values
-      so that indexing/layout can be handled centrally in vis_tools.
+    - number_of_channels is forwarded to measure_line_values so that indexing/layout can be handled in vis_tools.
     - channels should be a list of channel names; the returned DataFrame columns will be
       [channels[measure_channel], channels[align_channel]] in that order.
     - Plots are produced as a side-effect (per-ROI profiles and two summary plots: swarm and box).
@@ -51,6 +53,7 @@ def linescan(
         normalize (bool, optional): If True, profiles are min-max normalized for plotting. Defaults to True.
         scaling (float, optional): X-axis scaling factor to convert pixel indices to physical units. Defaults to 0.03525845591290619.
         align (bool, optional): If True, x-axes are shifted by the computed offset for aligned plotting. Defaults to True.
+        peak_method (str, optional): "poly" (poly+find_peaks) or "gaussian" (Gaussian fit center). Defaults to "poly".
 
     Returns:
         pandas.DataFrame: Two-column DataFrame with columns:
@@ -60,13 +63,6 @@ def linescan(
     Raises:
         ValueError: If ROI files are unsupported or other input validation fails downstream.
     """
-    def find_first_half(b):
-        half_lim = max(b) / 2
-        for i, y in enumerate(b):
-            if y > half_lim:
-                return i
-        return int(np.argmax(b))
-
     # canvas for per-ROI profile plots
     _, axs = plt.subplots(1, 1, figsize=(10, 5))
     image_peaks = [[], []]  # [measure_offsets, align_offsets]
@@ -83,51 +79,31 @@ def linescan(
             src = (item["y1"], item["x1"])
             dst = (item["y2"], item["x2"])
 
-            # Offset from align_channel via first half-maximum on a degree-10 polynomial
+            # 1) Offset from align_channel via half-maximum on a degree-10 polynomial
             values_align_channel = measure_line_values(
                 image, align_channel, img_slice - 1, src, dst, line_width, number_of_channels
             )
-            poly_align = np.poly1d(np.polyfit(np.arange(0, len(values_align_channel)), values_align_channel, 10))
-            t_hi = np.linspace(0, len(values_align_channel) - 1, 10 * len(values_align_channel))
-            vals_hi = poly_align(t_hi)
+            offset, t_hi, vals_hi = half_max_offset(values_align_channel)
 
-            # normalize safely to locate half-maximum
-            denom = (np.max(vals_hi) - np.min(vals_hi))
-            if denom == 0 or not np.isfinite(denom):
-                vals_norm = np.zeros_like(vals_hi)
-            else:
-                vals_norm = (vals_hi - np.min(vals_hi)) / denom
-            closest = find_first_half(vals_norm)
-            offset = t_hi[closest]
+            # 2) Peak from measure_channel using the chosen method
+            value_peak_channel = measure_line_values(
+                image, measure_channel, img_slice - 1, src, dst, line_width, number_of_channels
+            )
+            peak_point, gaussian_fit_result = peak_calling(value_peak_channel, method=peak_method)
 
-            # Process only align_channel and measure_channel
+            # 3) Plot normalized, optionally aligned profiles for both channels
             for channel in (align_channel, measure_channel):
                 color = color_for[channel]
                 channel_max = []
 
                 if channel == align_channel:
                     # By construction, this evaluates to ~0 in scaled units
-                    channel_max.append((t_hi[closest] - offset) * scaling)
+                    channel_max.append((t_hi[np.argmax(_safe_minmax(vals_hi) >= 0.5)] - offset) * scaling)
 
                 if channel == measure_channel:
-                    value_peak_channel = measure_line_values(
-                        image, channel, img_slice - 1, src, dst, line_width, number_of_channels
-                    )
-                    poly_meas = np.poly1d(np.polyfit(np.arange(0, len(value_peak_channel)), value_peak_channel, 10))
-                    t_meas = np.linspace(0, len(value_peak_channel) - 1, len(value_peak_channel))
-                    y_meas = poly_meas(t_meas)
+                    channel_max.append(((peak_point if np.isfinite(peak_point) else np.nan) - offset) * scaling)
 
-                    peaks, heights = signal.find_peaks(y_meas, height=np.max(y_meas) * 0.6)
-                    peak_heights = heights.get("peak_heights", [])
-                    if len(peak_heights) > 0:
-                        best_idx = int(np.argmax(peak_heights))
-                        peak_point = t_meas[peaks[best_idx]]
-                    else:
-                        peak_point = float("NaN")
-                        print(single_roi)
-                    channel_max.append((peak_point - offset) * scaling)
-
-                # Plot normalized, optionally aligned profiles
+                # Extract values for plotting this channel
                 value_channel = measure_line_values(
                     image, channel, img_slice - 1, src, dst, line_width, number_of_channels
                 )
@@ -170,17 +146,20 @@ def linescan(
                             #          color=color, linestyle=':', alpha=0.9, linewidth=1.5)
                             # ------------------------------
 
-                        if channel == measure_channel:
+                        if channel == measure_channel and peak_method == "gaussian" and gaussian_fit_result is not None:
                             # Gaussian overlay via lmfit (measure channel)
-                            x_data = np.arange(0, len(value_channel))
-                            y_data = value_channel
-                            gauss_model = models.GaussianModel()
-                            params = gauss_model.guess(y_data, x=x_data)
-                            result = gauss_model.fit(y_data, params, x=x_data)
                             t_plot = np.linspace(0, len(value_channel) - 1, len(value_channel) * 3)
-                            gaussian_fit = result.eval(x=t_plot)
+                            gaussian_fit = gaussian_fit_result.eval(x=t_plot)
                             axs.plot((t_plot - offset) * scaling, _safe_minmax(gaussian_fit),
                                      color=color, linestyle='--', alpha=0.9, linewidth=1.5)
+                        elif channel == measure_channel and peak_method == "poly":
+                            # Optional: dashed polynomial overlay for measure channel too (visual consistency)
+                            poly_meas_plot = np.poly1d(np.polyfit(np.arange(0, len(value_channel)), value_channel, 10))
+                            t_plot = np.linspace(0, len(value_channel) - 1, len(value_channel) * 3)
+                            vals_plot = poly_meas_plot(t_plot)
+                            axs.plot((t_plot - offset) * scaling, _safe_minmax(vals_plot),
+                                     color=color, linestyle='--', alpha=0.6, linewidth=1.0)
+
                         axs.set_xlim(-2, 3.5)
                     else:
                         axs.plot(
@@ -215,6 +194,81 @@ def linescan(
     else:
         sns.boxplot(data=df)
     return df
+
+
+def half_max_offset(values_align_channel, poly_degree=10, upsample_factor=10):
+    """
+    Compute alignment offset as the first half-maximum crossing
+    after smoothing with a polynomial.
+
+    Args:
+        values_align_channel (array-like): Raw profile of the align channel.
+        poly_degree (int): Degree of polynomial used for smoothing.
+        upsample_factor (int): Multiplier for dense sampling.
+
+    Returns:
+        tuple: (offset, t_hi, vals_hi)
+            - offset (float): x-position (in pixel index units) where the first half-maximum is reached.
+            - t_hi (np.ndarray): high-resolution x grid used for evaluation.
+            - vals_hi (np.ndarray): smoothed values on t_hi (not normalized).
+    """
+    y = np.asarray(values_align_channel, dtype=float)
+    x = np.arange(0, len(y))
+    poly = np.poly1d(np.polyfit(x, y, poly_degree))
+    t_hi = np.linspace(0, len(y) - 1, upsample_factor * len(y))
+    vals_hi = poly(t_hi)
+    vals_norm = _safe_minmax(vals_hi)
+    # first index where normalized value exceeds half-max
+    idx = int(np.argmax(vals_norm >= 0.5))
+    offset = t_hi[idx]
+    return offset, t_hi, vals_hi
+
+
+def peak_calling(value_peak_channel, method="poly"):
+    """
+    Estimate the peak location for a 1D profile.
+
+    Methods:
+        - "poly": degree-10 polynomial + scipy.signal.find_peaks (tallest peak).
+        - "gaussian": lmfit GaussianModel; returns the fitted center parameter.
+
+    Args:
+        value_peak_channel (array-like): Raw profile from the measure channel.
+        method (str): "poly" or "gaussian".
+
+    Returns:
+        tuple: (peak_point, fit_result)
+            - peak_point (float): x-position (pixel index units along the line), np.nan if not found.
+            - fit_result: lmfit.ModelResult if method == "gaussian" and fit succeeded; otherwise None.
+    """
+    y = np.asarray(value_peak_channel, dtype=float)
+    x = np.arange(0, len(y))
+
+    if method == "gaussian":
+        gauss_model = models.GaussianModel()
+        params = gauss_model.guess(y, x=x)
+        try:
+            result = gauss_model.fit(y, params, x=x)
+            mu = float(result.best_values.get("center", np.nan))
+            return mu, result
+        except Exception:
+            return float("nan"), None
+
+    # default: "poly"
+    poly = np.poly1d(np.polyfit(x, y, 10))
+    t = np.linspace(0, len(y) - 1, len(y))
+    y_sm = poly(t)
+    if np.all(~np.isfinite(y_sm)) or np.max(y_sm) == -np.inf:
+        return float("nan"), None
+    try:
+        peaks, heights = signal.find_peaks(y_sm, height=np.max(y_sm) * 0.6)
+        peak_heights = heights.get("peak_heights", [])
+        if len(peak_heights) > 0:
+            best_idx = int(np.argmax(peak_heights))
+            return float(t[peaks[best_idx]]), None
+        return float("nan"), None
+    except Exception:
+        return float("nan"), None
 
 
 def _safe_minmax(arr):
