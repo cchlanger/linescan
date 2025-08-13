@@ -180,21 +180,37 @@ def _plot_roi_profiles(
         x = np.arange(0, n)
         return ((x - offset) * scaling) if align else x
 
-    def _plot_series(y, color, style='-'):
-        yy = _safe_minmax(y) if normalize else np.asarray(y, dtype=float)
+    def _normalize_with_range(y, lo, hi):
+        y = np.asarray(y, dtype=float)
+        denom = (hi - lo)
+        if denom == 0 or not np.isfinite(denom):
+            return np.zeros_like(y, dtype=float)
+        return (y - lo) / denom
+
+    # Establish per-channel normalization ranges from the RAW curves
+    align_raw = np.asarray(align_values, dtype=float)
+    measure_raw = np.asarray(measure_values, dtype=float)
+    a_lo, a_hi = np.nanmin(align_raw), np.nanmax(align_raw)
+    m_lo, m_hi = np.nanmin(measure_raw), np.nanmax(measure_raw)
+
+    def _plot_series(y, color, style='-', use_align_scale=True):
+        if normalize:
+            yy = _normalize_with_range(y, a_lo, a_hi) if use_align_scale else _normalize_with_range(y, m_lo, m_hi)
+        else:
+            yy = np.asarray(y, dtype=float)
         ax.plot(_x_axis(len(yy)), yy, color=color, linestyle=style)
 
     # Raw curves
     if plot_mode in ("raw", "both"):
-        _plot_series(align_values, color_align, style='-')
-        _plot_series(measure_values, color_measure, style='-')
+        _plot_series(align_values, color_align, style='-', use_align_scale=True)
+        _plot_series(measure_values, color_measure, style='-', use_align_scale=False)
 
-    # Fit overlays
+    # Fit overlays (normalized using the same raw min/max per channel)
     if plot_mode in ("fit", "both"):
         # Align overlay
         if t_hi is not None and vals_hi is not None:
             x_fit = ((t_hi - offset) * scaling) if align else t_hi
-            y_fit = _safe_minmax(vals_hi) if normalize else vals_hi
+            y_fit = _normalize_with_range(vals_hi, a_lo, a_hi) if normalize else vals_hi
             linestyle = '--' if align_method == "poly" else ':'
             ax.plot(x_fit, y_fit, color=color_align, linestyle=linestyle, alpha=0.9, linewidth=1.5)
 
@@ -203,14 +219,14 @@ def _plot_roi_profiles(
             t_plot = np.linspace(0, len(measure_values) - 1, max(3, len(measure_values) * 3))
             gaussian_fit = gaussian_fit_result.eval(x=t_plot)
             x_fit = ((t_plot - offset) * scaling) if align else t_plot
-            y_fit = _safe_minmax(gaussian_fit) if normalize else gaussian_fit
+            y_fit = _normalize_with_range(gaussian_fit, m_lo, m_hi) if normalize else gaussian_fit
             ax.plot(x_fit, y_fit, color=color_measure, linestyle='--', alpha=0.9, linewidth=1.5)
         elif peak_method == "poly":
             poly_meas = np.poly1d(np.polyfit(np.arange(0, len(measure_values)), measure_values, 10))
             t_plot = np.linspace(0, len(measure_values) - 1, max(3, len(measure_values) * 3))
             vals_plot = poly_meas(t_plot)
             x_fit = ((t_plot - offset) * scaling) if align else t_plot
-            y_fit = _safe_minmax(vals_plot) if normalize else vals_plot
+            y_fit = _normalize_with_range(vals_plot, m_lo, m_hi) if normalize else vals_plot
             ax.plot(x_fit, y_fit, color=color_measure, linestyle='--', alpha=0.6, linewidth=1.0)
 
     if align:
