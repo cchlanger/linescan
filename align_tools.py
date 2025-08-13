@@ -235,52 +235,95 @@ def _plot_roi_profiles(
 
 def half_max_offset(values_align_channel, method="sigmoid", poly_degree=10, upsample_factor=10):
     """
-    Compute alignment offset as the first half-maximum crossing after smoothing.
+    Compute alignment offset as the half-maximum crossing.
 
-    Methods:
-        - "sigmoid": fit a sigmoid via lmfit, evaluate on a dense grid, take first crossing at 0.5.
-        - "poly": fit a polynomial (degree=poly_degree), evaluate on a dense grid, take first crossing at 0.5.
+    For method == "sigmoid", return the fitted center parameter (exact half-max crossing).
+    For method == "poly", smooth with a polynomial, then find the first half-max crossing
+    using linear interpolation on a dense grid.
 
     Args:
         values_align_channel (array-like): Raw profile of the align channel.
         method (str, optional): "sigmoid" (default) or "poly".
         poly_degree (int, optional): Degree of polynomial used for smoothing (poly method only).
-        upsample_factor (int, optional): Multiplier for dense sampling.
+        upsample_factor (int, optional): Multiplier for dense sampling (for overlays and poly crossing).
 
     Returns:
         tuple[float, np.ndarray, np.ndarray]: (offset, t_hi, vals_hi)
-            - offset (float): x-position (in pixel index units) where the first half-maximum is reached.
-            - t_hi (np.ndarray): high-resolution x grid used for evaluation.
-            - vals_hi (np.ndarray): smoothed values on t_hi (not normalized).
+            - offset (float): x-position (pixel index units) at half-maximum.
+            - t_hi (np.ndarray): dense x grid for overlay plotting.
+            - vals_hi (np.ndarray): smoothed values on t_hi for overlay plotting.
     """
     y = np.asarray(values_align_channel, dtype=float)
     x = np.arange(0, len(y))
-    t_hi = np.linspace(0, len(y) - 1, max(1, upsample_factor) * max(1, len(y)))
+    n = len(y)
+    if n == 0:
+        return 0.0, np.array([]), np.array([])
+
+    t_hi = np.linspace(0, n - 1, max(1, upsample_factor) * max(1, n))
 
     if method == "sigmoid":
+        # 4-parameter logistic: offset0 + amplitude / (1 + exp(-(x - center)/sigma))
         def sigmoid(xx, amplitude, center, sigma, offset0):
-            return amplitude / (1 + np.exp(-(xx - center) / sigma)) + offset0
+            return offset0 + amplitude / (1.0 + np.exp(-(xx - center) / sigma))
 
-        amp0 = float(np.nanmax(y) - np.nanmin(y)) if np.isfinite(np.nanmax(y) - np.nanmin(y)) else 1.0
-        center0 = len(y) / 2.0
-        sigma0 = max(1.0, len(y) / 10.0)
-        offset0 = float(np.nanmin(y)) if np.isfinite(np.nanmin(y)) else 0.0
+        # Initial guesses
+        y_min, y_max = np.nanmin(y), np.nanmax(y)
+        amp0 = float(y_max - y_min) if np.isfinite(y_max - y_min) and (y_max > y_min) else 1.0
+        center0 = n / 2.0
+        sigma0 = max(1.0, n / 10.0)
+        offset0 = float(y_min) if np.isfinite(y_min) else 0.0
 
         sig_model = Model(sigmoid)
         params = sig_model.make_params(amplitude=amp0, center=center0, sigma=sigma0, offset0=offset0)
+
         try:
-            result = sig_model.fit(y, params, xx=x)   # match "xx" argument name
+            result = sig_model.fit(y, params, xx=x)  # independent var name matches function
+            # Exact half-max crossing for this model is the fitted 'center'
+            center = float(result.best_values.get("center", center0))
             vals_hi = result.eval(xx=t_hi)
+            offset = center
+            return offset, t_hi, vals_hi
         except Exception:
-            poly = np.poly1d(np.polyfit(x, y, poly_degree))
-            vals_hi = poly(t_hi)
-    else:
+            # Fall back to polynomial smoothing if fitting fails
+            pass
+
+    # Polynomial path (either requested or sigmoid fit failed)
+    poly_degree = min(poly_degree, max(1, n - 1))  # keep degree < n
+    try:
         poly = np.poly1d(np.polyfit(x, y, poly_degree))
         vals_hi = poly(t_hi)
+    except Exception:
+        # Degenerate fallback: copy y onto t_hi length
+        vals_hi = np.interp(t_hi, x, y)
 
-    vals_norm = _safe_minmax(vals_hi)
-    idx = int(np.argmax(vals_norm >= 0.5))
-    offset = t_hi[idx]
+    # Compute half-level from smoothed curve and find first crossing with interpolation
+    a, b = float(np.nanmin(vals_hi)), float(np.nanmax(vals_hi))
+    if not np.isfinite(a) or not np.isfinite(b) or b <= a:
+        # give up gracefully
+        return float(t_hi[0]), t_hi, vals_hi
+
+    half_level = a + 0.5 * (b - a)
+
+    # Find indices where vals_hi crosses half_level
+    v = np.asarray(vals_hi, dtype=float)
+    above = v >= half_level
+    # We want the first rising crossing (False -> True). If decreasing edge is expected,
+    # you could relax this to any crossing or detect monotonic direction first.
+    crossings = np.where((~above[:-1]) & (above[1:]))[0]
+
+    if crossings.size == 0:
+        # If no rising crossing found, try any crossing by absolute difference
+        idx = int(np.argmin(np.abs(v - half_level)))
+        return float(t_hi[idx]), t_hi, vals_hi
+
+    i = crossings[0]
+    # Linear interpolation between t_hi[i]..t_hi[i+1]
+    y0, y1 = v[i], v[i + 1]
+    x0, x1 = t_hi[i], t_hi[i + 1]
+    if y1 == y0 or not np.isfinite(y1 - y0):
+        return float(x0), t_hi, vals_hi
+    frac = (half_level - y0) / (y1 - y0)
+    offset = float(x0 + frac * (x1 - x0))
     return offset, t_hi, vals_hi
 
 
