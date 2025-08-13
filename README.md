@@ -1,69 +1,43 @@
-# linescan
-A tool that does a linescan and performs peak detection and alignment based on FIJI ROIs.
-## getting started
-Open Git :)
-## functions
-### `plot_line_profiles(image_path, roi_path, number_of_channels, line_width=1)`
+## Linescan
 
-This function plots each linescan along with the corresponding image slice it was drawn on.  Individual channels are represented by different colors, and the drawn line is overlaid on the image. The line profile is normalized. Future enhancements may include fitting and peak calling display.  Values are represented in pixels.
+A tool that performs linescan analysis using FIJI ROIs, including alignment at the half-maximum point and peak detection with flexible fitting options.
 
-**Functionality:**
+## Summary
 
-The `plot_line_profiles` function visualizes line profiles extracted from image data based on specified ROIs.  It's designed to provide a quick and informative way to inspect the intensity variations along lines defined in FIJI, across different channels of an image.
+Linescan is a tool to measure the distance of a point to a surface along user-defined FIJI ROI lines. Lines are assumed to be drawn from outside to inside of the surface. The surface position is aligned using a sigmoid fit (default) on the align channel at the half-maximum reference, and the point position is detected with a Gaussian fit (default) on the measure channel. The reported value is the offset between these two positions in physical units.
 
-**Parameters:**
+## Install
+```
+pip install git+https://github.com/gerlichlab/linescan.git
+```
+## Visualization Function
 
-* `image_path` (str): The path to the image file.
-* `roi_path` (str): The path to the ROI file.
-* `number_of_channels` (int): The number of channels in the image.
-* `line_width` (int, optional): The width of the line. Defaults to 1.
+### plot_line_profiles(image_path, roi_path, number_of_channels, line_width=1)
 
-**Raises:**
+Visualizes each linescan together with the image slice it was drawn on. Individual channels are colored and the ROI line is overlaid on the image. Line profiles are min-max normalized for display. Values are shown in pixels.
 
-* `ValueError`: If the number of channels is not supported (currently only 2 or 3 channels are supported).
+Functionality: The function extracts and plots line profiles per ROI for each displayed channel, helping you quickly inspect intensity variations along FIJI-defined lines. Future enhancements may include showing fits and peak calls.
+
+Parameters: image_path (str): Path to the image file. roi_path (str): Path to the ROI file. number_of_channels (int): Number of channels in the image (2 or 3). line_width (int, optional): Line width in pixels. Defaults to 1.
+
+Raises: ValueError: If number_of_channels is not supported (currently only 2 or 3).
 
 ## Linescan Analysis Function
 
-### `linescan(image_path, roi_path, channels, number_of_channels, align_channel, measure_channel, line_width=5, normalize=True, scaling=0.03525845591290619, align=True)`
+### linescan(image_path, roi_path, channels, number_of_channels, align_channel, measure_channel, line_width=5, normalize=True, scaling=0.03525845591290619, align=True, peak_method="gaussian", align_method="sigmoid", plot_mode="both")
 
-This function performs linescan analysis on images based on provided regions of interest (ROIs). It analyzes line profiles across specified channels, with options for alignment and normalization.  Currently, it supports 2-channel and 3-channel images (3-channel analysis uses a 2-channel implementation by default, analyzing only the `align_channel` and `measure_channel`).
+Performs linescan analysis on images based on ROIs. For each ROI line segment, it computes an alignment offset from the align_channel at the half-maximum crossing and estimates the peak position in the measure_channel. It can plot raw profiles, fitted overlays, or both, with optional normalization and alignment.
 
-**Functionality:**
+What it does per ROI: 1) Alignment offset (half-maximum): align_method="sigmoid" (default) fits a 4-parameter logistic with lmfit; the fitted center is used as the exact half-max offset. The dense evaluation is used only for overlay plotting. align_method="poly" fits a degree-10 polynomial and finds the first half-max crossing via linear interpolation on a dense grid. The smoothed curve is used for the overlay. 2) Peak detection in the measure channel: peak_method="gaussian" (default) fits a Gaussian with lmfit and uses the fitted center as peak position. The fitted curve is available as an overlay. peak_method="poly" fits a degree-10 polynomial, then finds the tallest peak via scipy.signal.find_peaks. The smoothed curve is available as an overlay. 3) Plotting: plot_mode="raw", "fit", or "both". Y-values can be min-max normalized per channel for visualization. X can be aligned by subtracting the offset and scaled to physical units.
 
-The function reads image and ROI data, extracts line profiles for the specified channels, and optionally performs alignment and normalization.  The alignment is based on a designated `align_channel`, shifting profiles to align peaks. Normalization scales the intensity values within each profile. The results, including peak locations, are returned in a Pandas DataFrame.
+Parameters: image_path (list[str]): Paths to image files. roi_path (list[str]): Paths to corresponding ROI files (.roi or .zip), same order as image_path. channels (list[str]): Channel names, used to label output columns (e.g., ["DAPI", "GFP"]). number_of_channels (int): Total number of channels in the images (2 or 3). align_channel (int): 0-based index of channel used for alignment (half-max offset). measure_channel (int): 0-based index of channel for peak measurement. line_width (int, optional): Line width in pixels. Defaults to 5. normalize (bool, optional): If True, profiles are min-max normalized for plotting. Defaults to True. scaling (float, optional): Factor to scale pixel indices to physical units on the x-axis. Defaults to 0.03525845591290619. align (bool, optional): If True, plots are shifted by the computed offset for alignment. Defaults to True. peak_method (str, optional): "gaussian" or "poly". Defaults to "gaussian". align_method (str, optional): "sigmoid" or "poly". Defaults to "sigmoid". plot_mode (str, optional): "raw", "fit", or "both". Defaults to "both".
 
-**Parameters:**
+Returns: pandas.DataFrame: Two columns in the fixed order [measure, align], where channels[measure_channel] is the peak position of the measure channel relative to the offset (scaled units), and channels[align_channel] is always 0.0 (the align reference), since it is defined relative to the same half-max used as offset.
 
-* **`image_path`** (list): A list of paths to the image files (e.g., TIFF, OME-TIFF).
-* **`roi_path`** (list): A list of paths to the corresponding ROI files (e.g., `.roi`, `.zip`).  The order of ROI files must match the order of image files.
-* **`channels`** (list): A list of channel names corresponding to the image channels (e.g., `['DAPI', 'GFP']`).  This is used for labeling the output DataFrame columns.
-* **`number_of_channels`** (int): The number of channels in the images (2 or 3).
-* **`align_channel`** (int): The index (0-based) of the channel used for alignment.  Line profiles will be shifted to align based on the peak in this channel.
-* **`measure_channel`** (int): The index (0-based) of the channel on which measurements (peak finding) are performed.
-* **`line_width`** (int, optional): The width of the line profile in pixels. Defaults to 5.
-* **`normalize`** (bool, optional): Whether to normalize the line profiles. Defaults to `True`.
-* **`scaling`** (float, optional): Scaling factor for the x-axis (e.g., for converting pixels to physical units). Defaults to 0.03525845591290619.
-* **`align`** (bool, optional): Whether to align the line profiles based on the `align_channel`. Defaults to `True`.
+Notes: Summary plots show only the measured channel (beeswarm and boxplot). The align column is omitted because it is always zero by definition. Fit overlays are normalized using the same min and max as the corresponding raw channel to avoid apparent overshoot.
 
+Raises: ValueError: If ROI format or number_of_channels is unsupported downstream.
 
-**Returns:**
+## Example notebooks
 
-* **`pandas.DataFrame`**: A DataFrame containing the linescan data.  Columns correspond to the channel names provided in `channels`.  The DataFrame includes peak locations for the specified channels, potentially after alignment and normalization.
-
-**Raises:**
-
-* **`ValueError`**: If an unsupported number of channels is provided (i.e., not 2 or 3).
-
-## example notebooks
-TODO add notbooks of Claudia and Caelan
-## future features
-- add pip installer
-- use lmfit for interpolation and offer gaussian models
-- vis_tools
-    - display interpolation
-- align_tools
-    - remove destinction between 2 and 3 channel in the code
-    - catch bad user input
-    - for aligned_channel calculate and display a liner interpolation between the closest values instead of the fitted model value (which now is always zero)
-    - use the line_width of ROI if available
-    - explain scaling factor better
+See repository: https://github.com/gerlichlab/bell_et_al
