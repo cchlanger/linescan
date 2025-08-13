@@ -21,20 +21,26 @@ def linescan(
     normalize=True,
     scaling=0.03525845591290619,
     align=True,
-    peak_method="poly",   # "poly" (default, current behavior) or "gaussian"
+    peak_method="gaussian",   # default now Gaussian
+    align_method="poly",      # "poly" (default) or "sigmoid" for half-max offset and overlay
 ):
     """
     Perform linescan analysis on images using ROI line segments.
 
     For each ROI line segment, this function:
-    1) extracts the line profile from the align_channel, fits a polynomial (deg=10) and
-       finds the first half-maximum crossing on the smoothed curve to define an offset;
+    1) extracts the line profile from the align_channel and computes an alignment offset as the
+       first half-maximum crossing on a smoothed curve:
+       - If align_method == "poly": fit a degree-10 polynomial, upsample, then find the first 0.5 crossing.
+       - If align_method == "sigmoid": fit a sigmoid (via lmfit), evaluate densely, then find the first 0.5 crossing.
+       The same smoothed curve (polynomial or sigmoid) is overlaid on the align channel plot.
     2) extracts the line profile from the measure_channel and estimates the peak position:
+       - If peak_method == "gaussian": fits a Gaussian (lmfit) and uses the fitted center parameter as the peak.
        - If peak_method == "poly": fits a polynomial (deg=10), then finds the tallest peak via scipy.signal.find_peaks.
-       - If peak_method == "gaussian": fits a Gaussian (lmfit) and uses the fitted center parameter as the peak;
-    3) optionally plots normalized profiles for both channels, aligned by the offset, and
-       overlays a dashed polynomial fit for the align channel and a dashed Gaussian fit
-       for the measure channel (when available).
+       The corresponding fitted curve is optionally overlaid on the measure channel plot.
+    3) optionally plots normalized profiles for both channels, aligned by the offset, and overlays:
+       - a dashed polynomial or sigmoid fit for the align channel depending on align_method,
+       - a dashed Gaussian fit for the measure channel when peak_method == "gaussian"
+         (or a dashed polynomial when peak_method == "poly").
 
     Notes:
     - number_of_channels is forwarded to measure_line_values so that indexing/layout can be handled in vis_tools.
@@ -53,7 +59,8 @@ def linescan(
         normalize (bool, optional): If True, profiles are min-max normalized for plotting. Defaults to True.
         scaling (float, optional): X-axis scaling factor to convert pixel indices to physical units. Defaults to 0.03525845591290619.
         align (bool, optional): If True, x-axes are shifted by the computed offset for aligned plotting. Defaults to True.
-        peak_method (str, optional): "poly" (poly+find_peaks) or "gaussian" (Gaussian fit center). Defaults to "poly".
+        peak_method (str, optional): "gaussian" (default) or "poly".
+        align_method (str, optional): "poly" (default) or "sigmoid" for the half-max offset and overlay.
 
     Returns:
         pandas.DataFrame: Two-column DataFrame with columns:
@@ -79,11 +86,11 @@ def linescan(
             src = (item["y1"], item["x1"])
             dst = (item["y2"], item["x2"])
 
-            # 1) Offset from align_channel via half-maximum on a degree-10 polynomial
+            # 1) Offset from align_channel via chosen half-maximum method
             values_align_channel = measure_line_values(
                 image, align_channel, img_slice - 1, src, dst, line_width, number_of_channels
             )
-            offset, t_hi, vals_hi = half_max_offset(values_align_channel)
+            offset, t_hi, vals_hi = half_max_offset(values_align_channel, method=align_method)
 
             # 2) Peak from measure_channel using the chosen method
             value_peak_channel = measure_line_values(
@@ -115,36 +122,18 @@ def linescan(
                             color=color,
                         )
                         if channel == align_channel:
-                            # dashed polynomial overlay (align channel)
-                            poly_plot = np.poly1d(np.polyfit(np.arange(0, len(value_channel)), value_channel, 10))
-                            t_plot = np.linspace(0, len(value_channel) - 1, len(value_channel) * 3)
-                            vals_plot = poly_plot(t_plot)
-                            axs.plot((t_plot - offset) * scaling, _safe_minmax(vals_plot),
-                                     color=color, linestyle='--', alpha=0.9, linewidth=1.5)
-
-                            # ------------------------------
-                            # Optional sigmoid fitting block
-                            # ------------------------------
-                            # def sigmoid(x, amplitude, center, sigma, offset0):
-                            #     return amplitude / (1 + np.exp(-(x - center) / sigma)) + offset0
-                            #
-                            # x_data = np.arange(0, len(value_channel))
-                            # y_data = value_channel
-                            #
-                            # sigmoid_model = Model(sigmoid)
-                            # params = sigmoid_model.make_params(
-                            #     amplitude=max(y_data) - min(y_data),
-                            #     center=len(y_data) / 2,
-                            #     sigma=max(1.0, len(y_data) / 10),
-                            #     offset0=min(y_data),
-                            # )
-                            # result = sigmoid_model.fit(y_data, params, x=x_data)
-                            #
-                            # t_sig = np.linspace(0, len(value_channel) - 1, len(value_channel) * 3)
-                            # sigmoid_fit = result.eval(x=t_sig)
-                            # axs.plot((t_sig - offset) * scaling, _safe_minmax(sigmoid_fit),
-                            #          color=color, linestyle=':', alpha=0.9, linewidth=1.5)
-                            # ------------------------------
+                            # Use the same smoothed curve produced by half_max_offset for overlay.
+                            # If align_method == "poly": this is the polynomial smooth.
+                            # If align_method == "sigmoid": this is the sigmoid fit.
+                            linestyle = '--' if align_method == "poly" else ':'
+                            axs.plot(
+                                (t_hi - offset) * scaling,
+                                _safe_minmax(vals_hi),
+                                color=color,
+                                linestyle=linestyle,
+                                alpha=0.9,
+                                linewidth=1.5,
+                            )
 
                         if channel == measure_channel and peak_method == "gaussian" and gaussian_fit_result is not None:
                             # Gaussian overlay via lmfit (measure channel)
@@ -153,7 +142,7 @@ def linescan(
                             axs.plot((t_plot - offset) * scaling, _safe_minmax(gaussian_fit),
                                      color=color, linestyle='--', alpha=0.9, linewidth=1.5)
                         elif channel == measure_channel and peak_method == "poly":
-                            # Optional: dashed polynomial overlay for measure channel too (visual consistency)
+                            # Polynomial overlay for measure channel for visual consistency
                             poly_meas_plot = np.poly1d(np.polyfit(np.arange(0, len(value_channel)), value_channel, 10))
                             t_plot = np.linspace(0, len(value_channel) - 1, len(value_channel) * 3)
                             vals_plot = poly_meas_plot(t_plot)
@@ -196,14 +185,18 @@ def linescan(
     return df
 
 
-def half_max_offset(values_align_channel, poly_degree=10, upsample_factor=10):
+def half_max_offset(values_align_channel, method="poly", poly_degree=10, upsample_factor=10):
     """
-    Compute alignment offset as the first half-maximum crossing
-    after smoothing with a polynomial.
+    Compute alignment offset as the first half-maximum crossing after smoothing.
+
+    Methods:
+        - "poly": fit a polynomial (degree=poly_degree), evaluate on a dense grid, take first crossing at 0.5.
+        - "sigmoid": fit a sigmoid via lmfit, evaluate on a dense grid, take first crossing at 0.5.
 
     Args:
         values_align_channel (array-like): Raw profile of the align channel.
-        poly_degree (int): Degree of polynomial used for smoothing.
+        method (str): "poly" (default) or "sigmoid".
+        poly_degree (int): Degree of polynomial used for smoothing (poly method only).
         upsample_factor (int): Multiplier for dense sampling.
 
     Returns:
@@ -214,27 +207,48 @@ def half_max_offset(values_align_channel, poly_degree=10, upsample_factor=10):
     """
     y = np.asarray(values_align_channel, dtype=float)
     x = np.arange(0, len(y))
-    poly = np.poly1d(np.polyfit(x, y, poly_degree))
-    t_hi = np.linspace(0, len(y) - 1, upsample_factor * len(y))
-    vals_hi = poly(t_hi)
+    t_hi = np.linspace(0, len(y) - 1, max(1, upsample_factor) * max(1, len(y)))
+
+    if method == "sigmoid":
+        def sigmoid(xx, amplitude, center, sigma, offset0):
+            return amplitude / (1 + np.exp(-(xx - center) / sigma)) + offset0
+
+        # Initial guesses
+        amp0 = float(np.nanmax(y) - np.nanmin(y)) if np.isfinite(np.nanmax(y) - np.nanmin(y)) else 1.0
+        center0 = len(y) / 2.0
+        sigma0 = max(1.0, len(y) / 10.0)
+        offset0 = float(np.nanmin(y)) if np.isfinite(np.nanmin(y)) else 0.0
+
+        sig_model = Model(sigmoid)
+        params = sig_model.make_params(amplitude=amp0, center=center0, sigma=sigma0, offset0=offset0)
+        try:
+            result = sig_model.fit(y, params, x=x)
+            vals_hi = result.eval(x=t_hi)
+        except Exception:
+            # Fallback to polynomial if sigmoid fit fails
+            poly = np.poly1d(np.polyfit(x, y, poly_degree))
+            vals_hi = poly(t_hi)
+    else:
+        poly = np.poly1d(np.polyfit(x, y, poly_degree))
+        vals_hi = poly(t_hi)
+
     vals_norm = _safe_minmax(vals_hi)
-    # first index where normalized value exceeds half-max
-    idx = int(np.argmax(vals_norm >= 0.5))
+    idx = int(np.argmax(vals_norm >= 0.5))  # first index where normalized value exceeds half-max
     offset = t_hi[idx]
     return offset, t_hi, vals_hi
 
 
-def peak_calling(value_peak_channel, method="poly"):
+def peak_calling(value_peak_channel, method="gaussian"):
     """
     Estimate the peak location for a 1D profile.
 
     Methods:
+        - "gaussian": lmfit GaussianModel; returns the fitted center parameter as the peak.
         - "poly": degree-10 polynomial + scipy.signal.find_peaks (tallest peak).
-        - "gaussian": lmfit GaussianModel; returns the fitted center parameter.
 
     Args:
         value_peak_channel (array-like): Raw profile from the measure channel.
-        method (str): "poly" or "gaussian".
+        method (str): "gaussian" (default) or "poly".
 
     Returns:
         tuple: (peak_point, fit_result)
@@ -254,14 +268,14 @@ def peak_calling(value_peak_channel, method="poly"):
         except Exception:
             return float("nan"), None
 
-    # default: "poly"
+    # "poly" fallback
     poly = np.poly1d(np.polyfit(x, y, 10))
     t = np.linspace(0, len(y) - 1, len(y))
     y_sm = poly(t)
-    if np.all(~np.isfinite(y_sm)) or np.max(y_sm) == -np.inf:
+    if not np.any(np.isfinite(y_sm)):
         return float("nan"), None
     try:
-        peaks, heights = signal.find_peaks(y_sm, height=np.max(y_sm) * 0.6)
+        peaks, heights = signal.find_peaks(y_sm, height=np.nanmax(y_sm) * 0.6)
         peak_heights = heights.get("peak_heights", [])
         if len(peak_heights) > 0:
             best_idx = int(np.argmax(peak_heights))
@@ -273,8 +287,8 @@ def peak_calling(value_peak_channel, method="poly"):
 
 def _safe_minmax(arr):
     arr = np.asarray(arr, dtype=float)
-    amin, amax = np.min(arr), np.max(arr)
+    amin, amax = np.nanmin(arr), np.nanmax(arr)
     denom = (amax - amin)
     if denom == 0 or not np.isfinite(denom):
-        return np.zeros_like(arr)
+        return np.zeros_like(arr, dtype=float)
     return (arr - amin) / denom
