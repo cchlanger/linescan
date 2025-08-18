@@ -13,7 +13,17 @@ from .vis_tools import measure_line_values, read_roi
 def _fit_gaussian_with_robust_init(y, x=None, n_candidates=3, prominence_frac=0.1):
     """
     Fit a 1D Gaussian with a constant baseline using robust initial guesses.
-    Returns (center, lmfit.ModelResult) or (np.nan, None) on failure.
+
+    Args:
+        y (array-like): 1D signal values to fit.
+        x (array-like or None, optional): Coordinate vector for y. If None, uses np.arange(n).
+        n_candidates (int, optional): Number of candidate peak centers (sorted by prominence) to try for initialization.
+        prominence_frac (float, optional): Fraction of the signal dynamic range used to set the peak prominence threshold for candidate centers.
+
+    Returns:
+        tuple[float, lmfit.model.ModelResult | None]: A tuple (center, fit_result) where:
+            - center is the fitted Gaussian center (in x units), or np.nan on failure.
+            - fit_result is the lmfit ModelResult on success, else None.
     """
     # Adds a constant baseline to the model. If your traces ride on a nonzero background, this is often the main reason guess() fails.
     # Uses Savitzky–Golay smoothing plus peak prominence to choose a good initial center; sigma is derived from the measured FWHM; amplitude is set from height×sigma×sqrt(2π).
@@ -281,17 +291,17 @@ def _plot_roi_profiles(
         align_values (array-like): Raw align-channel profile.
         measure_values (array-like): Raw measure-channel profile.
         offset (float): Offset (pixels) for alignment.
-        scaling (float): X scaling factor to physical units.
-        normalize (bool): Min-max normalize the y-values for plotting.
-        align (bool): Shift x by offset if True.
-        align_method (str): "sigmoid" or "poly" for align overlay.
-        peak_method (str): "gaussian" or "poly" for measure overlay.
-        t_hi (np.ndarray|None): High-res x used for align fit overlay (from half_max_offset).
-        vals_hi (np.ndarray|None): Smoothed align values for overlay (from half_max_offset).
-        gaussian_fit_result (lmfit.ModelResult|None): Fit result for Gaussian overlay (measure).
-        color_align (str): Color for align channel.
-        color_measure (str): Color for measure channel.
-        plot_mode (str): "raw", "fit", or "both".
+        scaling (float): X-axis scaling factor to physical units.
+        normalize (bool, optional): If True, min-max normalize y for plotting.
+        align (bool, optional): If True, shift x by offset before scaling.
+        align_method (str, optional): "sigmoid" or "poly" for align overlay.
+        peak_method (str, optional): "gaussian" or "poly" for measure overlay.
+        t_hi (np.ndarray or None, optional): High-res x used for align fit overlay (from half_max_offset).
+        vals_hi (np.ndarray or None, optional): Smoothed align values for overlay (from half_max_offset).
+        gaussian_fit_result (lmfit.model.ModelResult or None, optional): Fit result for Gaussian overlay (measure).
+        color_align (str, optional): Color for align channel.
+        color_measure (str, optional): Color for measure channel.
+        plot_mode (str, optional): "raw", "fit", or "both".
 
     Returns:
         None
@@ -344,9 +354,17 @@ def _plot_roi_profiles(
             y_fit = _normalize_with_range(gaussian_fit, m_lo, m_hi) if normalize else gaussian_fit
             ax.plot(x_fit, y_fit, color=color_measure, linestyle='--', alpha=0.9, linewidth=1.5)
         elif peak_method == "poly":
-            poly_meas = np.poly1d(np.polyfit(np.arange(0, len(measure_values)), measure_values, 10))
-            t_plot = np.linspace(0, len(measure_values) - 1, max(3, len(measure_values) * 3))
-            vals_plot = poly_meas(t_plot)
+            n = len(measure_values)
+            xv = np.arange(0, n, dtype=float)
+            deg = min(10, max(1, n - 1))
+            try:
+                poly_meas = np.poly1d(np.polyfit(xv, measure_values, deg))
+                t_plot = np.linspace(0, n - 1, max(3, n * 3))
+                vals_plot = poly_meas(t_plot)
+            except Exception:
+                # Fallback: interpolate the raw values on a dense grid
+                t_plot = np.linspace(0, n - 1, max(3, n * 3))
+                vals_plot = np.interp(t_plot, xv, np.asarray(measure_values, dtype=float))
             x_fit = ((t_plot - offset) * scaling) if align else t_plot
             y_fit = _normalize_with_range(vals_plot, m_lo, m_hi) if normalize else vals_plot
             ax.plot(x_fit, y_fit, color=color_measure, linestyle='--', alpha=0.6, linewidth=1.0)
@@ -361,19 +379,19 @@ def half_max_offset(values_align_channel, method="sigmoid", poly_degree=10, upsa
 
     For method == "sigmoid", return the fitted center parameter (exact half-max crossing).
     For method == "poly", smooth with a polynomial, then find the first half-max crossing
-    using linear interpolation on a dense grid.
+    using linear interpolation on a dense grid (rising crossings only).
 
     Args:
         values_align_channel (array-like): Raw profile of the align channel.
         method (str, optional): "sigmoid" (default) or "poly".
         poly_degree (int, optional): Degree of polynomial used for smoothing (poly method only).
-        upsample_factor (int, optional): Multiplier for dense sampling (for overlays and poly crossing).
+        upsample_factor (int, optional): Multiplier for dense sampling for overlays and crossings.
 
     Returns:
-        tuple[float, np.ndarray, np.ndarray]: (offset, t_hi, vals_hi)
-            - offset (float): x-position (pixel index units) at half-maximum.
-            - t_hi (np.ndarray): dense x grid for overlay plotting.
-            - vals_hi (np.ndarray): smoothed values on t_hi for overlay plotting.
+        tuple[float, np.ndarray, np.ndarray]: (offset, t_hi, vals_hi) where:
+            - offset is the half-maximum crossing position in pixel index units.
+            - t_hi is the dense x grid for overlay plotting.
+            - vals_hi are the smoothed values on t_hi for overlay plotting.
     """
     y = np.asarray(values_align_channel, dtype=float)
     x = np.arange(0, len(y))
@@ -415,7 +433,7 @@ def half_max_offset(values_align_channel, method="sigmoid", poly_degree=10, upsa
         poly = np.poly1d(np.polyfit(x, y, poly_degree))
         vals_hi = poly(t_hi)
     except Exception:
-        # Degenerate fallback: copy y onto t_hi length
+        # Degenerate fallback: interpolate the raw values on a dense grid
         vals_hi = np.interp(t_hi, x, y)
 
     # Compute half-level from smoothed curve and find first crossing with interpolation
@@ -426,15 +444,13 @@ def half_max_offset(values_align_channel, method="sigmoid", poly_degree=10, upsa
 
     half_level = a + 0.5 * (b - a)
 
-    # Find indices where vals_hi crosses half_level
+    # Find indices where vals_hi crosses half_level (rising only)
     v = np.asarray(vals_hi, dtype=float)
     above = v >= half_level
-    # We want the first rising crossing (False -> True). If decreasing edge is expected,
-    # you could relax this to any crossing or detect monotonic direction first.
     crossings = np.where((~above[:-1]) & (above[1:]))[0]
 
     if crossings.size == 0:
-        # If no rising crossing found, try any crossing by absolute difference
+        # If no rising crossing found, pick the closest point to half-level as a fallback
         idx = int(np.argmin(np.abs(v - half_level)))
         return float(t_hi[idx]), t_hi, vals_hi
 
@@ -455,16 +471,16 @@ def peak_calling(value_peak_channel, method="gaussian"):
 
     Methods:
         - "gaussian": robust init + baseline using lmfit (returns fitted center).
-        - "poly": degree-10 polynomial + scipy.signal.find_peaks (tallest peak).
+        - "poly": degree-capped polynomial + upsampled peak search (tallest peak).
 
     Args:
         value_peak_channel (array-like): Raw profile from the measure channel.
         method (str, optional): "gaussian" (default) or "poly".
 
     Returns:
-        tuple[float, lmfit.model.ModelResult|None]:
-            - peak_point (float): x-position (pixel index units along the line), np.nan if not found.
-            - fit_result: lmfit.ModelResult if method == "gaussian" and fit succeeded; otherwise None.
+        tuple[float, lmfit.model.ModelResult | None]: (peak_point, fit_result) where:
+            - peak_point is the x-position (pixel index units) of the detected peak or np.nan on failure.
+            - fit_result is the lmfit ModelResult when method == "gaussian" and fit succeeded; otherwise None.
     """
     y = np.asarray(value_peak_channel, dtype=float)
     x = np.arange(0, len(y), dtype=float)
@@ -473,19 +489,30 @@ def peak_calling(value_peak_channel, method="gaussian"):
         mu, result = _fit_gaussian_with_robust_init(y, x)
         return mu, result
 
-    # "poly" fallback
-    poly = np.poly1d(np.polyfit(np.arange(0, len(y)), y, 10))
-    t = np.linspace(0, len(y) - 1, len(y))
+    # "poly" path (robust)
+    n = len(y)
+    if n < 2:
+        return float("nan"), None
+    deg = min(10, max(1, n - 1))
+    try:
+        poly = np.poly1d(np.polyfit(x, y, deg))
+    except Exception:
+        return float("nan"), None
+
+    # Evaluate on a denser grid to refine peak position
+    t = np.linspace(0, n - 1, max(3, n * 3))
     y_sm = poly(t)
     if not np.any(np.isfinite(y_sm)):
         return float("nan"), None
     try:
-        peaks, heights = signal.find_peaks(y_sm, height=np.nanmax(y_sm) * 0.6)
-        peak_heights = heights.get("peak_heights", [])
-        if len(peak_heights) > 0:
-            best_idx = int(np.argmax(peak_heights))
-            return float(t[peaks[best_idx]]), None
-        return float("nan"), None
+        height_thresh = np.nanmax(y_sm) * 0.6 if np.isfinite(np.nanmax(y_sm)) else None
+        peaks, props = signal.find_peaks(y_sm, height=height_thresh)
+        if len(peaks) == 0:
+            return float("nan"), None
+        # Select tallest peak among detected peaks
+        peak_heights = props.get("peak_heights", np.array([]))
+        best = int(peaks[np.argmax(peak_heights)]) if len(peak_heights) else int(peaks[0])
+        return float(t[best]), None
     except Exception:
         return float("nan"), None
 
