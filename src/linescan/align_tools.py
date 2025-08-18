@@ -10,6 +10,129 @@ from lmfit import Model
 from .vis_tools import measure_line_values, read_roi
 
 
+def _fit_gaussian_with_robust_init(y, x=None, n_candidates=3, prominence_frac=0.1):
+    """
+    Fit a 1D Gaussian with a constant baseline using robust initial guesses.
+    Returns (center, lmfit.ModelResult) or (np.nan, None) on failure.
+    """
+    # Adds a constant baseline to the model. If your traces ride on a nonzero background, this is often the main reason guess() fails.
+    # Uses Savitzky–Golay smoothing plus peak prominence to choose a good initial center; sigma is derived from the measured FWHM; amplitude is set from height×sigma×sqrt(2π).
+    # Tries multiple candidate peaks (by prominence) and keeps the best fit, which is much more stable on multi-peak or noisy profiles.
+    # Uses a robust loss (“soft_l1”) in the optimizer to blunt the effect of outliers.
+    y = np.asarray(y, dtype=float)
+    n = len(y)
+    if x is None:
+        x = np.arange(n, dtype=float)
+    else:
+        x = np.asarray(x, dtype=float)
+
+    if n < 3 or not np.any(np.isfinite(y)):
+        return float("nan"), None
+
+    # Replace non-finite values by linear interpolation
+    mask = np.isfinite(y)
+    if not np.all(mask):
+        if mask.any():
+            y = np.interp(np.arange(n, dtype=float), np.flatnonzero(mask), y[mask])
+        else:
+            return float("nan"), None
+
+    # Robust baseline and detrend
+    b0 = float(np.nanpercentile(y, 10))
+    y0 = y - b0
+
+    # Smooth to stabilize peak detection (skip if too short)
+    if n >= 7:
+        # window ~20% of signal length, odd, capped
+        w = max(5, (n // 5) * 2 + 1)
+        w = min(w, n - 1 if (n - 1) % 2 == 1 else n - 2)
+        if w < 5:
+            w = 5 if n >= 5 else (3 if n >= 3 else 1)
+        polyorder = min(3, w - 2) if w >= 5 else 2
+        try:
+            y_s = signal.savgol_filter(y0, window_length=w, polyorder=polyorder, mode="interp")
+        except Exception:
+            y_s = y0
+    else:
+        y_s = y0
+
+    # Peak candidates by prominence
+    dyn = float(np.nanmax(y_s) - np.nanmin(y_s)) if np.any(np.isfinite(y_s)) else 0.0
+    prom = dyn * float(prominence_frac)
+    try:
+        peaks, props = signal.find_peaks(y_s, prominence=prom if np.isfinite(prom) and prom > 0 else None)
+    except Exception:
+        peaks, props = np.array([], dtype=int), {"prominences": np.array([])}
+
+    if len(peaks) == 0:
+        # Fallback: use global maximum
+        peak_idx = int(np.nanargmax(y_s))
+        peaks = np.array([peak_idx], dtype=int)
+        props = {"prominences": np.array([max(y_s[peak_idx], 0.0)])}
+
+    # Sort candidates by prominence (desc) and keep top-k
+    prominences = props.get("prominences", np.zeros(len(peaks)))
+    order = np.argsort(prominences)[::-1][: max(1, int(n_candidates))]
+
+    # Estimate width at half-height for candidates
+    try:
+        widths, _, _, _ = signal.peak_widths(y_s, peaks, rel_height=0.5)
+    except Exception:
+        widths = np.full(len(peaks), max(3.0, n / 10.0), dtype=float)
+
+    # Build model: Constant baseline + Gaussian
+    model = models.ConstantModel(prefix="b_") + models.GaussianModel(prefix="g_")
+    best_result = None
+    best_score = np.inf
+
+    amp_area_cap = max(1.0, (np.nanmax(y) - np.nanmin(y)) * max(5.0, n / 5.0))
+
+    for idx in order:
+        pk = int(peaks[idx])
+        height0 = max(float(y_s[pk]), 1e-12)  # height above baseline (non-negative)
+        width0 = float(widths[idx]) if np.isfinite(widths[idx]) and widths[idx] > 0 else max(3.0, n / 10.0)
+        sigma0 = max(width0 / 2.355, 0.1)     # convert FWHM to sigma, clamp minimum
+        center0 = float(x[pk])
+
+        # lmfit GaussianModel uses 'amplitude' as area under the curve
+        amp0 = float(height0 * sigma0 * np.sqrt(2.0 * np.pi))
+        amp0 = min(max(amp0, 1e-12), amp_area_cap)
+
+        params = model.make_params(
+            b_c=b0,
+            g_amplitude=amp0,
+            g_center=center0,
+            g_sigma=sigma0,
+        )
+        # Reasonable bounds
+        params["g_center"].set(min=float(x[0]), max=float(x[-1]))
+        params["g_sigma"].set(min=0.1, max=max(2.0, float(x[-1] - x[0])))
+        params["g_amplitude"].set(min=0.0, max=amp_area_cap)
+
+        try:
+            # Use robust loss to reduce outlier influence
+            result = model.fit(
+                y,
+                params,
+                x=x,
+                nan_policy="omit",
+                method="least_squares",
+                fit_kws={"loss": "soft_l1", "f_scale": 0.5},
+            )
+            score = result.aic if np.isfinite(result.aic) else result.chisqr
+            if score < best_score:
+                best_score = score
+                best_result = result
+        except Exception:
+            continue
+
+    if best_result is None:
+        return float("nan"), None
+
+    center = float(best_result.best_values.get("g_center", np.nan))
+    return center, best_result
+
+
 def linescan(
     image_path,
     roi_path,
@@ -331,7 +454,7 @@ def peak_calling(value_peak_channel, method="gaussian"):
     Estimate the peak location for a 1D profile.
 
     Methods:
-        - "gaussian": lmfit GaussianModel; returns the fitted center parameter as the peak.
+        - "gaussian": robust init + baseline using lmfit (returns fitted center).
         - "poly": degree-10 polynomial + scipy.signal.find_peaks (tallest peak).
 
     Args:
@@ -344,20 +467,14 @@ def peak_calling(value_peak_channel, method="gaussian"):
             - fit_result: lmfit.ModelResult if method == "gaussian" and fit succeeded; otherwise None.
     """
     y = np.asarray(value_peak_channel, dtype=float)
-    x = np.arange(0, len(y))
+    x = np.arange(0, len(y), dtype=float)
 
     if method == "gaussian":
-        gauss_model = models.GaussianModel()
-        params = gauss_model.guess(y, x=x)
-        try:
-            result = gauss_model.fit(y, params, x=x)
-            mu = float(result.best_values.get("center", np.nan))
-            return mu, result
-        except Exception:
-            return float("nan"), None
+        mu, result = _fit_gaussian_with_robust_init(y, x)
+        return mu, result
 
     # "poly" fallback
-    poly = np.poly1d(np.polyfit(x, y, 10))
+    poly = np.poly1d(np.polyfit(np.arange(0, len(y)), y, 10))
     t = np.linspace(0, len(y) - 1, len(y))
     y_sm = poly(t)
     if not np.any(np.isfinite(y_sm)):
